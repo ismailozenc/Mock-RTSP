@@ -41,6 +41,17 @@ public sealed class StreamOptions
 
     public StreamOptions Clone() => (StreamOptions)MemberwiseClone();
 
+    /// <summary>True when every setting that only applies at server start is the same in both.</summary>
+    public bool ServerSettingsEqual(StreamOptions other) =>
+        MediaMtxLogLevel == other.MediaMtxLogLevel
+        && Transports == other.Transports
+        && ReadTimeoutSeconds == other.ReadTimeoutSeconds
+        && WriteTimeoutSeconds == other.WriteTimeoutSeconds
+        && ViewerUser == other.ViewerUser
+        && ViewerPassword == other.ViewerPassword
+        && PublisherUser == other.PublisherUser
+        && PublisherPassword == other.PublisherPassword;
+
     /// <summary>Returns a list of problems. Empty means the options are usable.</summary>
     public List<string> Validate()
     {

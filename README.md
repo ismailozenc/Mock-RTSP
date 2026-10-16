@@ -26,6 +26,8 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 5. Click **Quality...** to change a camera's bitrate, size, frame rate and other FFmpeg settings. Saving restarts that camera. Size, frame rate, bitrate and keyframe settings only apply when **Re-encode** is on.
 6. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
+**Stream options...** are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Saving applies the FFmpeg settings to every existing camera and restarts running ones. MediaMTX settings (transports, timeouts, logins, log level) need the server to be stopped and started again.
+
 Video files you add as cameras are remembered in the dropdown next to **Video file**, up to 10 files, in `%APPDATA%\MockRtsp\recent-files.txt`.
 
 When the server starts, any leftover `mediamtx.exe` from an earlier run of the same folder is stopped first.
