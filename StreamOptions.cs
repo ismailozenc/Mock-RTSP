@@ -117,8 +117,13 @@ public sealed class StreamOptions
             if (BitrateKbps > 0)
                 args.AddRange(new[] { "-b:v", BitrateKbps.ToString(inv) + "k" });
 
+            // A viewer shows nothing until the next keyframe. x264's default is one every 250 frames
+            // (10 s at 25 fps, 17 s at 15 fps), so VLC sat on a black picture that long.
+            // With no interval set, force one keyframe per second whatever the frame rate.
             if (KeyframeInterval > 0)
                 args.AddRange(new[] { "-g", KeyframeInterval.ToString(inv) });
+            else
+                args.AddRange(new[] { "-force_key_frames", "expr:gte(t,n_forced*1)" });
 
             if (NoBFrames)
                 args.AddRange(new[] { "-bf", "0" });

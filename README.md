@@ -26,6 +26,8 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 5. Click **Settings...** to change resolution, frame rate, bitrate and the other video settings. Saving applies them to every camera: running cameras restart with the new settings, and VLC windows opened from the app reopen on the new stream. Width and height must be even, for example 1280 x 720.
 6. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
+A viewer only shows a picture once the next keyframe arrives. When re-encoding, the app sends one keyframe per second unless you set an interval, so VLC starts within about a second. With re-encoding off, the video is sent as it is, so the wait depends on how far apart the keyframes in your video file are.
+
 Changing settings disconnects anyone watching, just as a real camera does when its resolution changes. Your own viewer has to reconnect; VLC windows opened from the app are reopened for you.
 
 Settings are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Server settings (transports, timeouts, logins, log level) apply after you stop and start the server. Logins can only use letters, digits and `! $ ( ) * + . ; < = > [ ] ^ _ - @ #`.
