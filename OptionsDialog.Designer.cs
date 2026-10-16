@@ -154,29 +154,28 @@ public sealed partial class OptionsDialog
 
         SuspendLayout();
 
-        // ---- Shared styling ----
-        var groupFont = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
-        var hintColor = SystemColors.GrayText;
-        var pairMargin = new Padding(0, 6, 10, 0);
-
         // ---- Bottom bar ----
         _bottom.Dock = DockStyle.Bottom;
         _bottom.Height = 58;
         _bottom.Padding = new Padding(12, 10, 12, 10);
+
         _reset.Location = new Point(12, 14);
         _reset.Size = new Size(120, 30);
         _reset.Text = "Reset defaults";
         _reset.Click += new EventHandler(OnResetClick);
+
         _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _cancel.DialogResult = DialogResult.Cancel;
         _cancel.Location = new Point(420, 14);
         _cancel.Size = new Size(96, 30);
         _cancel.Text = "Cancel";
+
         _ok.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _ok.Location = new Point(524, 14);
         _ok.Size = new Size(96, 30);
         _ok.Text = "OK";
         _ok.Click += new EventHandler(OnOkClick);
+
         _bottom.Controls.Add(_reset);
         _bottom.Controls.Add(_cancel);
         _bottom.Controls.Add(_ok);
@@ -187,7 +186,7 @@ public sealed partial class OptionsDialog
         _tabFfmpeg.Controls.Add(_ffGrid);
 
         _ffIntro.AutoSize = true;
-        _ffIntro.ForeColor = hintColor;
+        _ffIntro.ForeColor = SystemColors.GrayText;
         _ffIntro.Margin = new Padding(4, 4, 4, 8);
         _ffIntro.MaximumSize = new Size(560, 0);
         _ffIntro.Text = "How each camera's video is sent. Changes apply to cameras added from now on.";
@@ -210,7 +209,7 @@ public sealed partial class OptionsDialog
         // Timing group
         _grpTiming.AutoSize = true;
         _grpTiming.Dock = DockStyle.Fill;
-        _grpTiming.Font = groupFont;
+        _grpTiming.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpTiming.Padding = new Padding(10, 6, 10, 8);
         _grpTiming.Text = "Looping and timing";
         _grpTiming.Controls.Add(_timingGrid);
@@ -230,21 +229,23 @@ public sealed partial class OptionsDialog
 
         _loop.AutoSize = true;
         _loop.Checked = true;
-        _loop.Text = "Loop the video when it ends";
         _loop.Margin = new Padding(0, 3, 0, 3);
+        _loop.Text = "Loop the video when it ends";
+
         _realTime.AutoSize = true;
         _realTime.Checked = true;
-        _realTime.Text = "Send at real-time speed (like a camera)";
         _realTime.Margin = new Padding(0, 3, 0, 3);
+        _realTime.Text = "Send at real-time speed (like a camera)";
+
         _dropAudio.AutoSize = true;
         _dropAudio.Checked = true;
-        _dropAudio.Text = "Drop audio";
         _dropAudio.Margin = new Padding(0, 3, 0, 3);
+        _dropAudio.Text = "Drop audio";
 
         // Encoding group
         _grpEncode.AutoSize = true;
         _grpEncode.Dock = DockStyle.Fill;
-        _grpEncode.Font = groupFont;
+        _grpEncode.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpEncode.Padding = new Padding(10, 6, 10, 8);
         _grpEncode.Text = "Video encoding";
         _grpEncode.Controls.Add(_encodeGrid);
@@ -256,12 +257,15 @@ public sealed partial class OptionsDialog
         _encodeGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _encodeGrid.Dock = DockStyle.Fill;
         _encodeGrid.RowCount = 7;
-        for (int i = 0; i < 7; i++)
-            _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _encodeGrid.Controls.Add(_reEncode, 0, 0);
-        _encodeGrid.SetColumnSpan(_reEncode, 2);
         _encodeGrid.Controls.Add(_reEncodeHint, 0, 1);
-        _encodeGrid.SetColumnSpan(_reEncodeHint, 2);
         _encodeGrid.Controls.Add(_lblBitrate, 0, 2);
         _encodeGrid.Controls.Add(_bitrate, 1, 2);
         _encodeGrid.Controls.Add(_lblKeyframe, 0, 3);
@@ -271,64 +275,79 @@ public sealed partial class OptionsDialog
         _encodeGrid.Controls.Add(_lblFrameRate, 0, 5);
         _encodeGrid.Controls.Add(_frameRate, 1, 5);
         _encodeGrid.Controls.Add(_noBFrames, 0, 6);
+        _encodeGrid.SetColumnSpan(_reEncode, 2);
+        _encodeGrid.SetColumnSpan(_reEncodeHint, 2);
         _encodeGrid.SetColumnSpan(_noBFrames, 2);
 
         _reEncode.AutoSize = true;
-        _reEncode.Text = "Re-encode to H.264 (libx264)";
         _reEncode.Margin = new Padding(0, 3, 0, 3);
+        _reEncode.Text = "Re-encode to H.264 (libx264)";
+
         _reEncodeHint.AutoSize = true;
-        _reEncodeHint.ForeColor = hintColor;
-        _reEncodeHint.MaximumSize = new Size(520, 0);
+        _reEncodeHint.ForeColor = SystemColors.GrayText;
         _reEncodeHint.Margin = new Padding(20, 0, 0, 8);
+        _reEncodeHint.MaximumSize = new Size(520, 0);
         _reEncodeHint.Text = "Off passes the camera video through unchanged. On enables the settings below.";
+
         _lblBitrate.AutoSize = true;
-        _lblBitrate.Margin = pairMargin;
+        _lblBitrate.Margin = new Padding(0, 6, 10, 0);
         _lblBitrate.Text = "Bitrate (kbps, 0 = default):";
+
         _bitrate.Maximum = 100000;
         _bitrate.Increment = 100;
         _bitrate.Width = 120;
         _bitrate.Margin = new Padding(0, 3, 0, 3);
+
         _lblKeyframe.AutoSize = true;
-        _lblKeyframe.Margin = pairMargin;
+        _lblKeyframe.Margin = new Padding(0, 6, 10, 0);
         _lblKeyframe.Text = "Keyframe interval (frames, 0 = default):";
+
         _keyframe.Maximum = 1000;
         _keyframe.Width = 120;
         _keyframe.Margin = new Padding(0, 3, 0, 3);
+
         _lblSize.AutoSize = true;
-        _lblSize.Margin = pairMargin;
+        _lblSize.Margin = new Padding(0, 6, 10, 0);
         _lblSize.Text = "Size (width x height, 0 = keep):";
+
         _sizeRow.AutoSize = true;
         _sizeRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _sizeRow.WrapContents = false;
-        _sizeRow.Margin = new Padding(0, 0, 0, 0);
+        _sizeRow.Margin = new Padding(0);
         _sizeRow.Controls.Add(_width);
         _sizeRow.Controls.Add(_sizeX);
         _sizeRow.Controls.Add(_height);
+
         _width.Maximum = 7680;
         _width.Increment = 16;
         _width.Width = 90;
         _width.Margin = new Padding(0, 3, 0, 3);
+
         _sizeX.AutoSize = true;
         _sizeX.Margin = new Padding(6, 6, 6, 0);
         _sizeX.Text = "x";
+
         _height.Maximum = 4320;
         _height.Increment = 16;
         _height.Width = 90;
         _height.Margin = new Padding(0, 3, 0, 3);
+
         _lblFrameRate.AutoSize = true;
-        _lblFrameRate.Margin = pairMargin;
+        _lblFrameRate.Margin = new Padding(0, 6, 10, 0);
         _lblFrameRate.Text = "Frame rate (0 = keep):";
+
         _frameRate.Maximum = 240;
         _frameRate.Width = 120;
         _frameRate.Margin = new Padding(0, 3, 0, 3);
+
         _noBFrames.AutoSize = true;
-        _noBFrames.Text = "Disable B-frames (lower latency)";
         _noBFrames.Margin = new Padding(0, 3, 0, 3);
+        _noBFrames.Text = "Disable B-frames (lower latency)";
 
         // Publishing group
         _grpPublish.AutoSize = true;
         _grpPublish.Dock = DockStyle.Fill;
-        _grpPublish.Font = groupFont;
+        _grpPublish.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpPublish.Padding = new Padding(10, 6, 10, 8);
         _grpPublish.Text = "Publishing";
         _grpPublish.Controls.Add(_publishGrid);
@@ -348,14 +367,17 @@ public sealed partial class OptionsDialog
         _publishGrid.Controls.Add(_ffmpegLog, 1, 1);
 
         _lblPublishTransport.AutoSize = true;
-        _lblPublishTransport.Margin = pairMargin;
+        _lblPublishTransport.Margin = new Padding(0, 6, 10, 0);
         _lblPublishTransport.Text = "Transport to MediaMTX:";
+
         _publishTransport.DropDownStyle = ComboBoxStyle.DropDownList;
         _publishTransport.Width = 160;
         _publishTransport.Margin = new Padding(0, 3, 0, 3);
+
         _lblFfmpegLog.AutoSize = true;
-        _lblFfmpegLog.Margin = pairMargin;
+        _lblFfmpegLog.Margin = new Padding(0, 6, 10, 0);
         _lblFfmpegLog.Text = "FFmpeg log level:";
+
         _ffmpegLog.DropDownStyle = ComboBoxStyle.DropDownList;
         _ffmpegLog.Width = 160;
         _ffmpegLog.Margin = new Padding(0, 3, 0, 3);
@@ -371,8 +393,11 @@ public sealed partial class OptionsDialog
         _mtxGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _mtxGrid.Dock = DockStyle.Fill;
         _mtxGrid.RowCount = 5;
-        for (int i = 0; i < 5; i++)
-            _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _mtxGrid.Controls.Add(_mtxIntro, 0, 0);
         _mtxGrid.Controls.Add(_grpNetwork, 0, 1);
         _mtxGrid.Controls.Add(_grpLogging, 0, 2);
@@ -380,7 +405,7 @@ public sealed partial class OptionsDialog
         _mtxGrid.Controls.Add(_grpPublisher, 0, 4);
 
         _mtxIntro.AutoSize = true;
-        _mtxIntro.ForeColor = hintColor;
+        _mtxIntro.ForeColor = SystemColors.GrayText;
         _mtxIntro.Margin = new Padding(4, 4, 4, 8);
         _mtxIntro.MaximumSize = new Size(560, 0);
         _mtxIntro.Text = "The RTSP server. Changes apply the next time the server starts.";
@@ -388,7 +413,7 @@ public sealed partial class OptionsDialog
         // Network group
         _grpNetwork.AutoSize = true;
         _grpNetwork.Dock = DockStyle.Fill;
-        _grpNetwork.Font = groupFont;
+        _grpNetwork.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpNetwork.Padding = new Padding(10, 6, 10, 8);
         _grpNetwork.Text = "Network and timeouts";
         _grpNetwork.Controls.Add(_netGrid);
@@ -411,22 +436,27 @@ public sealed partial class OptionsDialog
         _netGrid.Controls.Add(_writeTimeout, 1, 2);
 
         _lblTransports.AutoSize = true;
-        _lblTransports.Margin = pairMargin;
+        _lblTransports.Margin = new Padding(0, 6, 10, 0);
         _lblTransports.Text = "RTSP transports:";
+
         _transports.DropDownStyle = ComboBoxStyle.DropDownList;
         _transports.Width = 160;
         _transports.Margin = new Padding(0, 3, 0, 3);
+
         _lblReadTimeout.AutoSize = true;
-        _lblReadTimeout.Margin = pairMargin;
+        _lblReadTimeout.Margin = new Padding(0, 6, 10, 0);
         _lblReadTimeout.Text = "Read timeout (seconds):";
+
         _readTimeout.Minimum = 1;
         _readTimeout.Maximum = 300;
         _readTimeout.Value = 10;
         _readTimeout.Width = 120;
         _readTimeout.Margin = new Padding(0, 3, 0, 3);
+
         _lblWriteTimeout.AutoSize = true;
-        _lblWriteTimeout.Margin = pairMargin;
+        _lblWriteTimeout.Margin = new Padding(0, 6, 10, 0);
         _lblWriteTimeout.Text = "Write timeout (seconds):";
+
         _writeTimeout.Minimum = 1;
         _writeTimeout.Maximum = 300;
         _writeTimeout.Value = 10;
@@ -436,7 +466,7 @@ public sealed partial class OptionsDialog
         // Logging group
         _grpLogging.AutoSize = true;
         _grpLogging.Dock = DockStyle.Fill;
-        _grpLogging.Font = groupFont;
+        _grpLogging.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpLogging.Padding = new Padding(10, 6, 10, 8);
         _grpLogging.Text = "Logging";
         _grpLogging.Controls.Add(_logGrid);
@@ -453,8 +483,9 @@ public sealed partial class OptionsDialog
         _logGrid.Controls.Add(_mtxLog, 1, 0);
 
         _lblMtxLog.AutoSize = true;
-        _lblMtxLog.Margin = pairMargin;
+        _lblMtxLog.Margin = new Padding(0, 6, 10, 0);
         _lblMtxLog.Text = "MediaMTX log level:";
+
         _mtxLog.DropDownStyle = ComboBoxStyle.DropDownList;
         _mtxLog.Width = 160;
         _mtxLog.Margin = new Padding(0, 3, 0, 3);
@@ -462,7 +493,7 @@ public sealed partial class OptionsDialog
         // Viewer login group
         _grpViewer.AutoSize = true;
         _grpViewer.Dock = DockStyle.Fill;
-        _grpViewer.Font = groupFont;
+        _grpViewer.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpViewer.Padding = new Padding(10, 6, 10, 8);
         _grpViewer.Text = "Viewer login (optional, required to watch the stream)";
         _grpViewer.Controls.Add(_viewerGrid);
@@ -482,13 +513,16 @@ public sealed partial class OptionsDialog
         _viewerGrid.Controls.Add(_viewerPassword, 1, 1);
 
         _lblViewerUser.AutoSize = true;
-        _lblViewerUser.Margin = pairMargin;
+        _lblViewerUser.Margin = new Padding(0, 6, 10, 0);
         _lblViewerUser.Text = "Username (blank = none):";
+
         _viewerUser.Width = 200;
         _viewerUser.Margin = new Padding(0, 3, 0, 3);
+
         _lblViewerPassword.AutoSize = true;
-        _lblViewerPassword.Margin = pairMargin;
+        _lblViewerPassword.Margin = new Padding(0, 6, 10, 0);
         _lblViewerPassword.Text = "Password:";
+
         _viewerPassword.Width = 200;
         _viewerPassword.UseSystemPasswordChar = true;
         _viewerPassword.Margin = new Padding(0, 3, 0, 3);
@@ -496,7 +530,7 @@ public sealed partial class OptionsDialog
         // Publisher login group
         _grpPublisher.AutoSize = true;
         _grpPublisher.Dock = DockStyle.Fill;
-        _grpPublisher.Font = groupFont;
+        _grpPublisher.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
         _grpPublisher.Padding = new Padding(10, 6, 10, 8);
         _grpPublisher.Text = "Publisher login (optional, required to send the stream)";
         _grpPublisher.Controls.Add(_pubGrid);
@@ -516,13 +550,16 @@ public sealed partial class OptionsDialog
         _pubGrid.Controls.Add(_publisherPassword, 1, 1);
 
         _lblPublisherUser.AutoSize = true;
-        _lblPublisherUser.Margin = pairMargin;
+        _lblPublisherUser.Margin = new Padding(0, 6, 10, 0);
         _lblPublisherUser.Text = "Username (blank = none):";
+
         _publisherUser.Width = 200;
         _publisherUser.Margin = new Padding(0, 3, 0, 3);
+
         _lblPublisherPassword.AutoSize = true;
-        _lblPublisherPassword.Margin = pairMargin;
+        _lblPublisherPassword.Margin = new Padding(0, 6, 10, 0);
         _lblPublisherPassword.Text = "Password:";
+
         _publisherPassword.Width = 200;
         _publisherPassword.UseSystemPasswordChar = true;
         _publisherPassword.Margin = new Padding(0, 3, 0, 3);
@@ -547,7 +584,6 @@ public sealed partial class OptionsDialog
         CancelButton = _cancel;
         AutoScaleDimensions = new SizeF(8F, 20F);
         AutoScaleMode = AutoScaleMode.Font;
-        AutoSize = false;
         ClientSize = new Size(640, 600);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -558,21 +594,6 @@ public sealed partial class OptionsDialog
         Controls.Add(_bottom);      // bottom panel first so the tab control docks correctly
         Controls.Add(_tabs);
 
-        _bottom.ResumeLayout(false);
-        _tabFfmpeg.ResumeLayout(false);
-        _tabMtx.ResumeLayout(false);
-        _ffGrid.ResumeLayout(false);
-        _timingGrid.ResumeLayout(false);
-        _encodeGrid.ResumeLayout(false);
-        _sizeRow.ResumeLayout(false);
-        _publishGrid.ResumeLayout(false);
-        _mtxGrid.ResumeLayout(false);
-        _netGrid.ResumeLayout(false);
-        _logGrid.ResumeLayout(false);
-        _viewerGrid.ResumeLayout(false);
-        _pubGrid.ResumeLayout(false);
-        _tabs.ResumeLayout(false);
         ResumeLayout(false);
-        PerformLayout();
     }
 }
