@@ -35,25 +35,66 @@ public static class VlcLauncher
         return null;
     }
 
-    /// <summary>Opens the URL in VLC. Low network caching makes the picture appear sooner.</summary>
-    public static void Open(string vlcPath, string url)
+    /// <summary>
+    /// Opens the URL in a new VLC window and returns its process, so the caller can close it.
+    /// Low network caching makes the picture appear sooner. RTSP over TCP avoids lost UDP packets.
+    /// </summary>
+    public static Process Open(string vlcPath, string url, string title)
     {
         var psi = new ProcessStartInfo(vlcPath)
         {
             UseShellExecute = false
         };
+        psi.ArgumentList.Add("--no-one-instance");      // always a separate window we can close later
         psi.ArgumentList.Add("--network-caching=300");
+        psi.ArgumentList.Add("--rtsp-tcp");
+        psi.ArgumentList.Add($"--meta-title={title}");
         psi.ArgumentList.Add(url);
 
         try
         {
-            using Process? process = Process.Start(psi);
-            if (process is null)
-                throw new InvalidOperationException("VLC did not start.");
+            return Process.Start(psi) ?? throw new InvalidOperationException("VLC did not start.");
         }
         catch (Win32Exception ex)
         {
             throw new InvalidOperationException($"Could not run VLC at '{vlcPath}'.", ex);
+        }
+    }
+
+    /// <summary>Closes a VLC window opened by Open. Never throws.</summary>
+    public static void Close(Process? process)
+    {
+        if (process is null)
+            return;
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+                process.WaitForExit(2000);
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "Closing VLC");
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    /// <summary>True if the VLC window is still open. Never throws.</summary>
+    public static bool IsOpen(Process? process)
+    {
+        try
+        {
+            return process is not null && !process.HasExited;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            return false;
         }
     }
 }

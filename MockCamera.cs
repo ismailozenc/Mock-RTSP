@@ -134,6 +134,35 @@ public sealed class MockCamera : IDisposable
             Start();
     }
 
+    /// <summary>
+    /// Waits until a viewer can actually play the stream. Returns false if FFmpeg stops or the
+    /// stream is not up within the timeout.
+    /// </summary>
+    public async Task<bool> WaitUntilLiveAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_disposed || !IsOnline)
+                return false;
+
+            string user, password;
+            lock (_gate)
+            {
+                user = _options.ViewerUser;
+                password = _options.ViewerPassword;
+            }
+
+            if (await _server.IsPathReadyAsync(_path, user, password, ct))
+                return true;
+
+            await Task.Delay(250, ct);
+        }
+
+        return false;
+    }
+
     public bool IsOnline
     {
         get

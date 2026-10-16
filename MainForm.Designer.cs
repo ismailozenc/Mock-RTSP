@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace MockRtsp;
 
 public sealed partial class MainForm
@@ -23,7 +25,6 @@ public sealed partial class MainForm
     private Button _startCamera = null!;
     private Button _stopCamera = null!;
     private Button _removeCamera = null!;
-    private Button _quality = null!;
     private Button _openVlc = null!;
     private Label _lblOutage = null!;
     private NumericUpDown _outageSeconds = null!;
@@ -66,7 +67,6 @@ public sealed partial class MainForm
         _startCamera = new Button();
         _stopCamera = new Button();
         _removeCamera = new Button();
-        _quality = new Button();
         _openVlc = new Button();
         _lblOutage = new Label();
         _outageSeconds = new NumericUpDown();
@@ -99,7 +99,7 @@ public sealed partial class MainForm
         _stopServer.AutoSize = true;
         _stopServer.Text = "Stop server";
         _optionsButton.AutoSize = true;
-        _optionsButton.Text = "Stream options...";
+        _optionsButton.Text = "Settings...";
 
         // _serverRow
         _serverRow.AutoSize = true;
@@ -145,8 +145,6 @@ public sealed partial class MainForm
         _stopCamera.Text = "Stop";
         _removeCamera.AutoSize = true;
         _removeCamera.Text = "Remove";
-        _quality.AutoSize = true;
-        _quality.Text = "Quality...";
         _openVlc.AutoSize = true;
         _openVlc.Text = "Open in VLC";
         _lblOutage.AutoSize = true;
@@ -163,7 +161,7 @@ public sealed partial class MainForm
         _actionsRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _actionsRow.Margin = new Padding(0, 0, 0, 4);
         _actionsRow.WrapContents = true;
-        _actionsRow.Controls.AddRange(new Control[] { _startCamera, _stopCamera, _removeCamera, _quality, _openVlc, _lblOutage, _outageSeconds, _outage });
+        _actionsRow.Controls.AddRange(new Control[] { _startCamera, _stopCamera, _removeCamera, _openVlc, _lblOutage, _outageSeconds, _outage });
 
         // Log
         _log.Dock = DockStyle.Fill;
@@ -202,7 +200,6 @@ public sealed partial class MainForm
         _startCamera.Click += new EventHandler(OnStartCameraClick);
         _stopCamera.Click += new EventHandler(OnStopCameraClick);
         _removeCamera.Click += new EventHandler(OnRemoveCameraClick);
-        _quality.Click += new EventHandler(OnQualityClick);
         _openVlc.Click += new EventHandler(OnOpenVlcClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _cameras.SelectedIndexChanged += new EventHandler(OnCamerasSelectedIndexChanged);
