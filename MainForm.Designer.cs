@@ -134,7 +134,9 @@ public sealed partial class MainForm
 
         // Camera list
         _cameras.Dock = DockStyle.Fill;
+        _cameras.DrawMode = DrawMode.OwnerDrawFixed;    // drawn live, so [ON]/[off] stays current
         _cameras.IntegralHeight = false;
+        _cameras.ItemHeight = 22;
 
         // Camera actions row
         _startCamera.AutoSize = true;
@@ -204,13 +206,15 @@ public sealed partial class MainForm
         _openVlc.Click += new EventHandler(OnOpenVlcClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _cameras.SelectedIndexChanged += new EventHandler(OnCamerasSelectedIndexChanged);
+        _cameras.DrawItem += new DrawItemEventHandler(OnCamerasDrawItem);
 
         // Timer (refreshes camera status once a second)
         _timer.Interval = 1000;
         _timer.Tick += new EventHandler(OnTimerTick);
 
         // Form
-        AutoScaleDimensions = new SizeF(8F, 20F);
+        AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
+        Font = new Font("Segoe UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(1000, 700);
         MinimumSize = new Size(900, 600);

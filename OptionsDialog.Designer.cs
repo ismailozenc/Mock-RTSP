@@ -210,7 +210,7 @@ public sealed partial class OptionsDialog
         // Timing group
         _grpTiming.AutoSize = true;
         _grpTiming.Dock = DockStyle.Fill;
-        _grpTiming.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpTiming.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpTiming.Padding = new Padding(10, 6, 10, 8);
         _grpTiming.Text = "Looping and timing";
         _grpTiming.Controls.Add(_timingGrid);
@@ -220,6 +220,7 @@ public sealed partial class OptionsDialog
         _timingGrid.ColumnCount = 1;
         _timingGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _timingGrid.Dock = DockStyle.Fill;
+        _timingGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _timingGrid.RowCount = 3;
         _timingGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _timingGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -246,7 +247,7 @@ public sealed partial class OptionsDialog
         // Encoding group
         _grpEncode.AutoSize = true;
         _grpEncode.Dock = DockStyle.Fill;
-        _grpEncode.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpEncode.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpEncode.Padding = new Padding(10, 6, 10, 8);
         _grpEncode.Text = "Video encoding";
         _grpEncode.Controls.Add(_encodeGrid);
@@ -257,6 +258,7 @@ public sealed partial class OptionsDialog
         _encodeGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _encodeGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _encodeGrid.Dock = DockStyle.Fill;
+        _encodeGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _encodeGrid.RowCount = 7;
         _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _encodeGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -348,7 +350,7 @@ public sealed partial class OptionsDialog
         // Publishing group
         _grpPublish.AutoSize = true;
         _grpPublish.Dock = DockStyle.Fill;
-        _grpPublish.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpPublish.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpPublish.Padding = new Padding(10, 6, 10, 8);
         _grpPublish.Text = "Publishing";
         _grpPublish.Controls.Add(_publishGrid);
@@ -359,6 +361,7 @@ public sealed partial class OptionsDialog
         _publishGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _publishGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _publishGrid.Dock = DockStyle.Fill;
+        _publishGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _publishGrid.RowCount = 2;
         _publishGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _publishGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -415,7 +418,7 @@ public sealed partial class OptionsDialog
         // Network group
         _grpNetwork.AutoSize = true;
         _grpNetwork.Dock = DockStyle.Fill;
-        _grpNetwork.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpNetwork.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpNetwork.Padding = new Padding(10, 6, 10, 8);
         _grpNetwork.Text = "Network and timeouts";
         _grpNetwork.Controls.Add(_netGrid);
@@ -426,6 +429,7 @@ public sealed partial class OptionsDialog
         _netGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _netGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _netGrid.Dock = DockStyle.Fill;
+        _netGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _netGrid.RowCount = 3;
         _netGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _netGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -468,7 +472,7 @@ public sealed partial class OptionsDialog
         // Logging group
         _grpLogging.AutoSize = true;
         _grpLogging.Dock = DockStyle.Fill;
-        _grpLogging.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpLogging.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpLogging.Padding = new Padding(10, 6, 10, 8);
         _grpLogging.Text = "Logging";
         _grpLogging.Controls.Add(_logGrid);
@@ -479,6 +483,7 @@ public sealed partial class OptionsDialog
         _logGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _logGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _logGrid.Dock = DockStyle.Fill;
+        _logGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _logGrid.RowCount = 1;
         _logGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _logGrid.Controls.Add(_lblMtxLog, 0, 0);
@@ -495,7 +500,7 @@ public sealed partial class OptionsDialog
         // Viewer login group
         _grpViewer.AutoSize = true;
         _grpViewer.Dock = DockStyle.Fill;
-        _grpViewer.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpViewer.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpViewer.Padding = new Padding(10, 6, 10, 8);
         _grpViewer.Text = "Viewer login (optional, required to watch the stream)";
         _grpViewer.Controls.Add(_viewerGrid);
@@ -506,6 +511,7 @@ public sealed partial class OptionsDialog
         _viewerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _viewerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _viewerGrid.Dock = DockStyle.Fill;
+        _viewerGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _viewerGrid.RowCount = 2;
         _viewerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _viewerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -532,7 +538,7 @@ public sealed partial class OptionsDialog
         // Publisher login group
         _grpPublisher.AutoSize = true;
         _grpPublisher.Dock = DockStyle.Fill;
-        _grpPublisher.Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold);
+        _grpPublisher.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _grpPublisher.Padding = new Padding(10, 6, 10, 8);
         _grpPublisher.Text = "Publisher login (optional, required to send the stream)";
         _grpPublisher.Controls.Add(_pubGrid);
@@ -543,6 +549,7 @@ public sealed partial class OptionsDialog
         _pubGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _pubGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _pubGrid.Dock = DockStyle.Fill;
+        _pubGrid.Font = new Font("Segoe UI", 9F);   // regular text inside the bold group header
         _pubGrid.RowCount = 2;
         _pubGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _pubGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -584,7 +591,8 @@ public sealed partial class OptionsDialog
         // ---- Form ----
         AcceptButton = _ok;
         CancelButton = _cancel;
-        AutoScaleDimensions = new SizeF(8F, 20F);
+        AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
+        Font = new Font("Segoe UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
         ClientSize = new Size(700, 700);
         FormBorderStyle = FormBorderStyle.FixedDialog;

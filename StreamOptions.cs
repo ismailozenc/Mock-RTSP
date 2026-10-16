@@ -69,6 +69,10 @@ public sealed class StreamOptions
         if (PublishTransport is not ("tcp" or "udp"))
             problems.Add("Publish transport must be tcp or udp.");
 
+        if ((Transports == RtspTransportMode.UdpOnly && PublishTransport == "tcp")
+            || (Transports == RtspTransportMode.TcpOnly && PublishTransport == "udp"))
+            problems.Add("The publish transport must be one the server accepts (RTSP transports on the MediaMTX tab).");
+
         if (ReadTimeoutSeconds < 1 || WriteTimeoutSeconds < 1)
             problems.Add("Timeouts must be at least 1 second.");
 

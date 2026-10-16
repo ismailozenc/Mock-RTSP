@@ -82,24 +82,28 @@ public sealed partial class OptionsDialog : Form
         _realTime.Checked = o.RealTime;
         _dropAudio.Checked = o.DropAudio;
         _reEncode.Checked = o.ReEncode;
-        _bitrate.Value = o.BitrateKbps;
-        _keyframe.Value = o.KeyframeInterval;
-        _width.Value = o.Width;
-        _height.Value = o.Height;
-        _frameRate.Value = o.FrameRate;
+        SetValue(_bitrate, o.BitrateKbps);
+        SetValue(_keyframe, o.KeyframeInterval);
+        SetValue(_width, o.Width);
+        SetValue(_height, o.Height);
+        SetValue(_frameRate, o.FrameRate);
         _noBFrames.Checked = o.NoBFrames;
         _publishTransport.SelectedItem = o.PublishTransport;
         _ffmpegLog.SelectedItem = o.FfmpegLogLevel;
 
         _mtxLog.SelectedItem = o.MediaMtxLogLevel;
         _transports.SelectedIndex = (int)o.Transports;
-        _readTimeout.Value = o.ReadTimeoutSeconds;
-        _writeTimeout.Value = o.WriteTimeoutSeconds;
+        SetValue(_readTimeout, o.ReadTimeoutSeconds);
+        SetValue(_writeTimeout, o.WriteTimeoutSeconds);
         _viewerUser.Text = o.ViewerUser;
         _viewerPassword.Text = o.ViewerPassword;
         _publisherUser.Text = o.PublisherUser;
         _publisherPassword.Text = o.PublisherPassword;
     }
+
+    /// <summary>Sets a value, clamped to the box's range, so an out-of-range saved value cannot throw.</summary>
+    private static void SetValue(NumericUpDown box, int value) =>
+        box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, value));
 
     private void ApplyToOptions()
     {
