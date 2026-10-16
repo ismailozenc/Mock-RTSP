@@ -5,26 +5,26 @@ A Windows Forms app that acts as a mock RTSP camera for testing. It runs [MediaM
 ## Requirements
 
 - .NET 8 SDK (Windows)
-- `ffmpeg` on PATH
-- `mediamtx.exe` from the [MediaMTX releases](https://github.com/bluenviron/mediamtx/releases). Either choose it in the app, or place it at `Binaries\mediamtx.exe` before building to embed it.
-
-## Build and run
-
-Open `MockRtsp.sln` in Visual Studio, or run:
+- `mediamtx.exe` and `ffmpeg.exe`, placed in folders next to `MockRtsp.exe`:
 
 ```
-dotnet build
-dotnet run --project MockRtsp.csproj
+MockRtsp.exe
+mediamtx\mediamtx.exe
+ffmpeg\ffmpeg.exe        (or ffmpeg\bin\ffmpeg.exe)
 ```
+
+At startup the app searches those folders and logs what it found. Nothing needs to be configured, and nothing is read from PATH.
+
+For development, put the `mediamtx` and `ffmpeg` folders in the project folder. The build copies them next to the exe. They are git-ignored, so the binaries are not committed.
 
 ## Using the app
 
-1. Choose `mediamtx.exe` (or leave it blank if embedded) and click **Start server**.
+1. Click **Start server**.
 2. Enter a stream path such as `Streaming/Channels/101` and choose a video file to loop, then click **Add camera**.
 3. Select the camera and click **Start**. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 4. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
-The MediaMTX and FFmpeg paths are remembered in `%APPDATA%\MockRtsp\settings.ini` until you change them. Clear a field to go back to the embedded MediaMTX or to `ffmpeg` on PATH.
+When the server starts, any leftover `mediamtx.exe` from an earlier run of the same folder is stopped first.
 
 Errors are shown in a dialog and in the log. Unexpected errors are also written to `%LOCALAPPDATA%\MockRtsp\errors.log`.
 

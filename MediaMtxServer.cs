@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 
 namespace MockRtsp;
 
@@ -39,9 +38,11 @@ public sealed class MediaMtxServer : IDisposable
 
     public string BuildUrl(string path) => $"rtsp://127.0.0.1:{Port}/{path.TrimStart('/')}";
 
+    /// <param name="mediaMtxPath">Full path to mediamtx.exe.</param>
+    /// <param name="log">Optional callback for status messages.</param>
     public static async Task<MediaMtxServer> StartAsync(
-        int port = 8554,
-        string? mediaMtxPath = null,
+        int port,
+        string mediaMtxPath,
         TimeSpan? readyTimeout = null,
         CancellationToken ct = default,
         Action<string>? log = null)
@@ -51,7 +52,7 @@ public sealed class MediaMtxServer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(port),
                 "Port must be between 1025 and 64534 (RTP and RTCP use port + 1000 and port + 1001).");
 
-        string exe = mediaMtxPath ?? ExtractEmbeddedBinary();
+        string exe = mediaMtxPath;
 
         // Leftovers from an earlier run would hold the ports, so end them before checking.
         int stopped = StopStaleInstances(exe);
@@ -59,6 +60,7 @@ public sealed class MediaMtxServer : IDisposable
             log?.Invoke($"Stopped {stopped} leftover MediaMTX process(es) from an earlier run.");
 
         EnsurePortFree(port);
+
         string workDir = Path.Combine(Path.GetTempPath(), "mock-rtsp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
 
@@ -106,7 +108,7 @@ public sealed class MediaMtxServer : IDisposable
 
             if (ex is Win32Exception win32)
                 throw new InvalidOperationException(
-                    $"Could not run MediaMTX at '{exe}'. Check the path and that it is a Windows executable.", win32);
+                    $"Could not run MediaMTX at '{exe}'. Check that the file is a valid Windows executable.", win32);
 
             throw;
         }
@@ -222,27 +224,6 @@ public sealed class MediaMtxServer : IDisposable
         }
 
         throw new TimeoutException($"MediaMTX did not open port {port} within {timeout}.");
-    }
-
-    private static string ExtractEmbeddedBinary()
-    {
-        const string resourceName = "MockRtsp.Binaries.mediamtx.exe";
-        string target = Path.Combine(Path.GetTempPath(), "mock-rtsp-mediamtx.exe");
-
-        if (File.Exists(target))
-            return target;
-
-        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
-            ?? throw new FileNotFoundException(
-                "MediaMTX is not embedded in this build. Choose mediamtx.exe in the MediaMTX field.");
-
-        // Write to a unique temp file first, then move, so parallel runs don't collide.
-        string tmp = target + "." + Guid.NewGuid().ToString("N");
-        using (var file = File.Create(tmp))
-            stream.CopyTo(file);
-
-        File.Move(tmp, target, overwrite: true);
-        return target;
     }
 
     private static void KillQuietly(Process? process)

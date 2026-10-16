@@ -19,13 +19,11 @@ public sealed class MainForm : Form
             $"{(Camera.IsOnline ? "[ON]  " : "[off] ")}{StreamPath}    ({Path.GetFileName(SourceFile)})";
     }
 
-    private readonly AppSettings _settings = AppSettings.Load();
+    // Found at startup in the "mediamtx" and "ffmpeg" folders next to the program. Null if missing.
+    private readonly string? _mediaMtxExe;
+    private readonly string? _ffmpegExe;
 
     // Server row
-    private readonly TextBox _exePath = new() { Width = 300 };
-    private readonly Button _browseExe = new() { Text = "Browse...", AutoSize = true };
-    private readonly TextBox _ffmpegPath = new() { Width = 300 };
-    private readonly Button _browseFfmpeg = new() { Text = "Browse...", AutoSize = true };
     private readonly NumericUpDown _port = new() { Minimum = 1025, Maximum = 64534, Value = 8554, Width = 80 };
     private readonly Button _startServer = new() { Text = "Start server", AutoSize = true };
     private readonly Button _stopServer = new() { Text = "Stop server", AutoSize = true };
@@ -64,20 +62,25 @@ public sealed class MainForm : Form
     {
         Text = "MockRtsp - mock RTSP camera";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1100, 720);
+        Size = new Size(1000, 720);
         MinimumSize = new Size(900, 600);
 
+        // Auto setup: look for the bundled tools once, at startup.
+        _mediaMtxExe = Toolchain.Find(Toolchain.MediaMtxFolder, "mediamtx.exe");
+        _ffmpegExe = Toolchain.Find(Toolchain.FfmpegFolder, "ffmpeg.exe");
+
         BuildLayout();
-
-        // Restore the remembered paths before the change handlers are wired.
-        _exePath.Text = _settings.MediaMtxPath;
-        _ffmpegPath.Text = _settings.FfmpegPath;
-
         WireEvents();
 
         _timer.Start();
         UpdateButtons();
-        Log($"Ready. Settings file: {AppSettings.FilePath}");
+
+        Log(_mediaMtxExe is not null
+            ? $"MediaMTX: {_mediaMtxExe}"
+            : $"MediaMTX not found. Put mediamtx.exe in the '{Toolchain.MediaMtxFolder}' folder next to MockRtsp.exe.");
+        Log(_ffmpegExe is not null
+            ? $"FFmpeg: {_ffmpegExe}"
+            : $"FFmpeg not found. Put ffmpeg.exe in the '{Toolchain.FfmpegFolder}' folder next to MockRtsp.exe.");
         Log("Start the MediaMTX server, then add cameras.");
     }
 
@@ -100,8 +103,6 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));   // log
 
         root.Controls.Add(Row(
-            Caption("MediaMTX exe (blank = embedded):"), _exePath, _browseExe,
-            Caption("FFmpeg exe (blank = PATH):"), _ffmpegPath, _browseFfmpeg,
             Caption("Port:"), _port, _startServer, _stopServer), 0, 0);
 
         root.Controls.Add(Row(
@@ -141,11 +142,7 @@ public sealed class MainForm : Form
 
     private void WireEvents()
     {
-        _browseExe.Click += (_, _) => Safe(BrowseExe, "Browse for MediaMTX");
-        _browseFfmpeg.Click += (_, _) => Safe(BrowseFfmpeg, "Browse for FFmpeg");
         _browseVideo.Click += (_, _) => Safe(BrowseVideo, "Browse for video");
-        _exePath.Leave += (_, _) => SaveSettings();
-        _ffmpegPath.Leave += (_, _) => SaveSettings();
         _startServer.Click += async (_, _) => await SafeAsync(StartServerAsync, "Start server");
         _stopServer.Click += (_, _) => Safe(StopServer, "Stop server");
         _addCamera.Click += (_, _) => Safe(AddCamera, "Add camera");
@@ -155,11 +152,7 @@ public sealed class MainForm : Form
         _outage.Click += async (_, _) => await SafeAsync(SimulateOutageAsync, "Simulate outage");
         _cameras.SelectedIndexChanged += (_, _) => UpdateButtons();
         _timer.Tick += (_, _) => OnTimerTick();
-        FormClosing += (_, _) =>
-        {
-            SaveSettings();
-            Safe(StopServer, "Shutdown");
-        };
+        FormClosing += (_, _) => Safe(StopServer, "Shutdown");
     }
 
     // ---- Error handling wrappers: every UI action goes through one of these ----
@@ -214,73 +207,27 @@ public sealed class MainForm : Form
         }
     }
 
-    // ---- Settings ----
+    // ---- Tool checks ----
 
-    /// <summary>Saves the executable paths to settings.ini. Failures are logged, not shown as dialogs.</summary>
-    private void SaveSettings()
+    private string RequireMediaMtx()
     {
-        if (IsDisposed)
-            return;
+        if (_mediaMtxExe is null || !File.Exists(_mediaMtxExe))
+            throw new FileNotFoundException(
+                $"mediamtx.exe not found. Put it in the '{Toolchain.MediaMtxFolder}' folder next to MockRtsp.exe.");
 
-        try
-        {
-            _settings.MediaMtxPath = _exePath.Text.Trim();
-            _settings.FfmpegPath = _ffmpegPath.Text.Trim();
-            _settings.Save();
-        }
-        catch (Exception ex)
-        {
-            ErrorReporter.Report(ex, "Saving settings");
-            Log($"Could not save settings: {ex.Message}");
-        }
+        return _mediaMtxExe;
     }
 
-    /// <summary>Returns the FFmpeg command to run, checking the file exists when a full path was given.</summary>
-    private string FfmpegExecutable()
+    private string RequireFfmpeg()
     {
-        string value = _ffmpegPath.Text.Trim();
-
-        if (value.Length == 0)
-            return "ffmpeg";
-
-        if (value.IndexOfAny(new[] { '\\', '/' }) >= 0 && !File.Exists(value))
+        if (_ffmpegExe is null || !File.Exists(_ffmpegExe))
             throw new FileNotFoundException(
-                "FFmpeg executable not found. Fix the path in the FFmpeg field.", value);
+                $"ffmpeg.exe not found. Put it in the '{Toolchain.FfmpegFolder}' folder next to MockRtsp.exe.");
 
-        return value;
+        return _ffmpegExe;
     }
 
     // ---- Actions ----
-
-    private void BrowseExe()
-    {
-        using var dialog = new OpenFileDialog
-        {
-            Title = "Locate mediamtx.exe",
-            Filter = "MediaMTX (mediamtx*.exe)|mediamtx*.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*"
-        };
-
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            _exePath.Text = dialog.FileName;
-            SaveSettings();
-        }
-    }
-
-    private void BrowseFfmpeg()
-    {
-        using var dialog = new OpenFileDialog
-        {
-            Title = "Locate ffmpeg.exe",
-            Filter = "FFmpeg (ffmpeg.exe)|ffmpeg.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*"
-        };
-
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            _ffmpegPath.Text = dialog.FileName;
-            SaveSettings();
-        }
-    }
 
     private void BrowseVideo()
     {
@@ -302,13 +249,8 @@ public sealed class MainForm : Form
             return;
         }
 
+        string exe = RequireMediaMtx();
         int port = (int)_port.Value;
-        string? exe = string.IsNullOrWhiteSpace(_exePath.Text) ? null : _exePath.Text.Trim();
-
-        if (exe is not null && !File.Exists(exe))
-            throw new FileNotFoundException("MediaMTX executable not found.", exe);
-
-        SaveSettings();
 
         await RunBusyAsync(async () =>
         {
@@ -370,7 +312,7 @@ public sealed class MainForm : Form
         if (!File.Exists(source))
             throw new FileNotFoundException("Video file not found.", source);
 
-        var camera = new MockCamera(_server, path, source, FfmpegExecutable());
+        var camera = new MockCamera(_server, path, source, RequireFfmpeg());
         camera.PublisherExited += (_, code) =>
             Log($"FFmpeg for '{path}' exited with code {code}. Stream is down.");
 
@@ -460,16 +402,9 @@ public sealed class MainForm : Form
         var selected = SelectedEntry;
         bool selectedOnline = selected?.Camera.IsOnline ?? false;
 
-        // Executable paths can only change while the server is stopped.
         _port.Enabled = !serverUp && !_busy;
-        _exePath.Enabled = !serverUp && !_busy;
-        _browseExe.Enabled = !serverUp && !_busy;
-        _startServer.Enabled = !serverUp && !_busy;
+        _startServer.Enabled = !serverUp && !_busy && _mediaMtxExe is not null;
         _stopServer.Enabled = serverUp && !_busy;
-
-        // The FFmpeg path is read when a camera is added, so it can change at any time.
-        _ffmpegPath.Enabled = !_busy;
-        _browseFfmpeg.Enabled = !_busy;
 
         _streamPath.Enabled = serverUp && !_busy;
         _sourceFile.Enabled = serverUp && !_busy;
@@ -483,7 +418,7 @@ public sealed class MainForm : Form
 
         _statusText.Text = serverUp
             ? $"MediaMTX running on port {_server!.Port}  |  cameras: {_entries.Count}"
-            : "Server stopped";
+            : _mediaMtxExe is null ? "MediaMTX not found" : "Server stopped";
     }
 
     private void Log(string message)

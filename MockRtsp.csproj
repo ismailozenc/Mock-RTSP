@@ -11,10 +11,12 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
-  <!-- Embed mediamtx.exe only when it has been placed in Binaries\ (optional). -->
-  <ItemGroup Condition="Exists('Binaries\mediamtx.exe')">
-    <EmbeddedResource Include="Binaries\mediamtx.exe"
-                      LogicalName="MockRtsp.Binaries.mediamtx.exe" />
+  <!-- If the project folder has mediamtx\ and ffmpeg\ folders, copy them next to MockRtsp.exe on build. -->
+  <ItemGroup Condition="Exists('mediamtx')">
+    <None Include="mediamtx\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('ffmpeg')">
+    <None Include="ffmpeg\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
