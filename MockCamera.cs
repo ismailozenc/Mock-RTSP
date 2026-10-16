@@ -14,6 +14,10 @@ public sealed class MockCamera : IDisposable
     private Process? _publisher;
     private bool _disposed;
 
+    // The last few lines FFmpeg wrote to its error output, kept to explain why it stopped.
+    private readonly Queue<string> _ffmpegOutput = new();
+    private const int MaxOutputLines = 8;
+
     /// <summary>
     /// Raised when FFmpeg exits by itself (bad file, crash, etc.). Not raised when
     /// the camera is stopped through Stop, SimulateOutageAsync or Dispose.
@@ -49,6 +53,31 @@ public sealed class MockCamera : IDisposable
         _path = path.Trim().TrimStart('/');
         _sourceFile = sourceFile;
         _ffmpegPath = ffmpegPath;
+    }
+
+    /// <summary>The last lines FFmpeg printed, for showing why it stopped. Empty if it printed nothing.</summary>
+    public string LastFfmpegOutput
+    {
+        get
+        {
+            lock (_ffmpegOutput)
+            {
+                return string.Join(Environment.NewLine, _ffmpegOutput);
+            }
+        }
+    }
+
+    private void OnFfmpegOutput(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+
+        lock (_ffmpegOutput)
+        {
+            _ffmpegOutput.Enqueue(line.Trim());
+            while (_ffmpegOutput.Count > MaxOutputLines)
+                _ffmpegOutput.Dequeue();
+        }
     }
 
     /// <summary>The camera's URL without login details. Safe to show in the log.</summary>
@@ -132,8 +161,14 @@ public sealed class MockCamera : IDisposable
             var psi = new ProcessStartInfo(_ffmpegPath)
             {
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                RedirectStandardError = true
             };
+
+            lock (_ffmpegOutput)
+            {
+                _ffmpegOutput.Clear();
+            }
 
             // FFmpeg must send the publisher login, or MediaMTX refuses the stream.
             string publishUrl = _server.BuildUrl(_path, _options.PublisherUser, _options.PublisherPassword);
@@ -158,7 +193,9 @@ public sealed class MockCamera : IDisposable
             // Assign before subscribing, so the exit handler can always recognise this process.
             _publisher = process;
             process.EnableRaisingEvents = true;
+            process.ErrorDataReceived += (_, e) => OnFfmpegOutput(e.Data);
             process.Exited += (sender, _) => OnPublisherExited(sender as Process);
+            process.BeginErrorReadLine();           // also keeps FFmpeg from blocking on a full pipe
         }
     }
 
@@ -232,6 +269,7 @@ public sealed class MockCamera : IDisposable
                 if (process is null || !ReferenceEquals(process, _publisher))
                     return;                         // We stopped it ourselves, or it was replaced.
 
+                process.WaitForExit();              // lets the last error lines arrive before they are read
                 exitCode = process.ExitCode;
                 _publisher = null;
                 process.Dispose();

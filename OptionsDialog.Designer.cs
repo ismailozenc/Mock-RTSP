@@ -166,12 +166,12 @@ public sealed partial class OptionsDialog
 
         _cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _cancel.DialogResult = DialogResult.Cancel;
-        _cancel.Location = new Point(420, 14);
+        _cancel.Location = new Point(480, 14);
         _cancel.Size = new Size(96, 30);
         _cancel.Text = "Cancel";
 
         _ok.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-        _ok.Location = new Point(524, 14);
+        _ok.Location = new Point(584, 14);
         _ok.Size = new Size(96, 30);
         _ok.Text = "OK";
         _ok.Click += new EventHandler(OnOkClick);
@@ -181,6 +181,7 @@ public sealed partial class OptionsDialog
         _bottom.Controls.Add(_ok);
 
         // ---- FFmpeg tab ----
+        _tabFfmpeg.AutoScroll = true;
         _tabFfmpeg.Padding = new Padding(10);
         _tabFfmpeg.Text = "FFmpeg (camera stream)";
         _tabFfmpeg.Controls.Add(_ffGrid);
@@ -188,14 +189,14 @@ public sealed partial class OptionsDialog
         _ffIntro.AutoSize = true;
         _ffIntro.ForeColor = SystemColors.GrayText;
         _ffIntro.Margin = new Padding(4, 4, 4, 8);
-        _ffIntro.MaximumSize = new Size(560, 0);
+        _ffIntro.MaximumSize = new Size(620, 0);
         _ffIntro.Text = "How each camera's video is sent. Changes apply to cameras added from now on.";
 
         _ffGrid.AutoSize = true;
         _ffGrid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _ffGrid.ColumnCount = 1;
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _ffGrid.Dock = DockStyle.Fill;
+        _ffGrid.Dock = DockStyle.Top;
         _ffGrid.RowCount = 4;
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -286,7 +287,7 @@ public sealed partial class OptionsDialog
         _reEncodeHint.AutoSize = true;
         _reEncodeHint.ForeColor = SystemColors.GrayText;
         _reEncodeHint.Margin = new Padding(20, 0, 0, 8);
-        _reEncodeHint.MaximumSize = new Size(520, 0);
+        _reEncodeHint.MaximumSize = new Size(580, 0);
         _reEncodeHint.Text = "Off passes the camera video through unchanged. Changing any setting below turns re-encoding on.";
 
         _lblBitrate.AutoSize = true;
@@ -383,6 +384,7 @@ public sealed partial class OptionsDialog
         _ffmpegLog.Margin = new Padding(0, 3, 0, 3);
 
         // ---- MediaMTX tab ----
+        _tabMtx.AutoScroll = true;
         _tabMtx.Padding = new Padding(10);
         _tabMtx.Text = "MediaMTX (server)";
         _tabMtx.Controls.Add(_mtxGrid);
@@ -391,7 +393,7 @@ public sealed partial class OptionsDialog
         _mtxGrid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _mtxGrid.ColumnCount = 1;
         _mtxGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _mtxGrid.Dock = DockStyle.Fill;
+        _mtxGrid.Dock = DockStyle.Top;
         _mtxGrid.RowCount = 5;
         _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -407,7 +409,7 @@ public sealed partial class OptionsDialog
         _mtxIntro.AutoSize = true;
         _mtxIntro.ForeColor = SystemColors.GrayText;
         _mtxIntro.Margin = new Padding(4, 4, 4, 8);
-        _mtxIntro.MaximumSize = new Size(560, 0);
+        _mtxIntro.MaximumSize = new Size(620, 0);
         _mtxIntro.Text = "The RTSP server. Changes apply the next time the server starts.";
 
         // Network group
@@ -584,7 +586,7 @@ public sealed partial class OptionsDialog
         CancelButton = _cancel;
         AutoScaleDimensions = new SizeF(8F, 20F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(640, 600);
+        ClientSize = new Size(700, 700);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;

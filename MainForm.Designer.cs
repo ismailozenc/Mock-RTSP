@@ -118,6 +118,7 @@ public sealed partial class MainForm
         _lblVideo.Margin = new Padding(6, 6, 2, 0);
         _lblVideo.Text = "Video file:";
         _sourceFile.DropDownStyle = ComboBoxStyle.DropDown;   // typed paths allowed; recent files in the list
+        _sourceFile.DropDownWidth = 600;
         _sourceFile.Width = 360;
         _browseVideo.AutoSize = true;
         _browseVideo.Text = "Browse...";
