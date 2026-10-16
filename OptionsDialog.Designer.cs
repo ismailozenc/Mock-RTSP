@@ -287,7 +287,7 @@ public sealed partial class OptionsDialog
         _reEncodeHint.ForeColor = SystemColors.GrayText;
         _reEncodeHint.Margin = new Padding(20, 0, 0, 8);
         _reEncodeHint.MaximumSize = new Size(520, 0);
-        _reEncodeHint.Text = "Off passes the camera video through unchanged. On enables the settings below.";
+        _reEncodeHint.Text = "Off passes the camera video through unchanged. Changing any setting below turns re-encoding on.";
 
         _lblBitrate.AutoSize = true;
         _lblBitrate.Margin = new Padding(0, 6, 10, 0);
