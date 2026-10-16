@@ -1,94 +1,210 @@
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace MockRtsp;
 
 public sealed class MockCamera : IDisposable
 {
+    private readonly object _gate = new();
     private readonly MediaMtxServer _server;
     private readonly string _path;
     private readonly string _sourceFile;
     private readonly string _ffmpegPath;
     private Process? _publisher;
+    private bool _disposed;
+
+    /// <summary>
+    /// Raised when FFmpeg exits by itself (bad file, crash, etc.). Not raised when
+    /// the camera is stopped through Stop, SimulateOutageAsync or Dispose.
+    /// Raised on a thread-pool thread.
+    /// </summary>
+    public event EventHandler<int>? PublisherExited;
 
     /// <param name="path">Stream path, e.g. "Streaming/Channels/101" to match Hikvision URLs.</param>
     /// <param name="sourceFile">H.264/H.265 video file to loop. Use real footage from your cameras.</param>
     public MockCamera(MediaMtxServer server, string path, string sourceFile, string ffmpegPath = "ffmpeg")
     {
+        ArgumentNullException.ThrowIfNull(server);
+
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Stream path is required.", nameof(path));
+
         if (!File.Exists(sourceFile))
             throw new FileNotFoundException("Source video not found.", sourceFile);
 
         _server = server;
-        _path = path.TrimStart('/');
+        _path = path.Trim().TrimStart('/');
         _sourceFile = sourceFile;
         _ffmpegPath = ffmpegPath;
     }
 
     public string Url => _server.BuildUrl(_path);
 
-    public bool IsOnline => _publisher is { HasExited: false };
+    public bool IsOnline
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _publisher is not null && IsProcessRunning(_publisher);
+            }
+        }
+    }
 
     public void Start()
     {
-        if (IsOnline) return;
+        ThrowIfDisposed();
 
-        var psi = new ProcessStartInfo(_ffmpegPath)
+        lock (_gate)
         {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+            if (_publisher is not null && IsProcessRunning(_publisher))
+                return;
 
-        // -stream_loop must come before -i. -re paces output at real-time speed.
-        foreach (var arg in new[]
-        {
-            "-hide_banner", "-loglevel", "warning",
-            "-re", "-stream_loop", "-1",
-            "-fflags", "+genpts",
-            "-i", _sourceFile,
-            "-an",                      // drop audio
-            "-c:v", "copy",             // pass the codec through unchanged
-            "-f", "rtsp",
-            "-rtsp_transport", "tcp",
-            Url
-        })
-        {
-            psi.ArgumentList.Add(arg);
+            // A previous publisher that exited on its own may still be around.
+            _publisher?.Dispose();
+            _publisher = null;
+
+            var psi = new ProcessStartInfo(_ffmpegPath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            // -stream_loop must come before -i. -re paces output at real-time speed.
+            foreach (var arg in new[]
+            {
+                "-hide_banner", "-loglevel", "warning",
+                "-re", "-stream_loop", "-1",
+                "-fflags", "+genpts",
+                "-i", _sourceFile,
+                "-an",                      // drop audio
+                "-c:v", "copy",             // pass the codec through unchanged
+                "-f", "rtsp",
+                "-rtsp_transport", "tcp",
+                Url
+            })
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            Process process;
+            try
+            {
+                process = Process.Start(psi)
+                    ?? throw new InvalidOperationException("FFmpeg did not start.");
+            }
+            catch (Win32Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Could not start FFmpeg ('{_ffmpegPath}'). Install FFmpeg and add it to PATH, " +
+                    "or pass its full path.", ex);
+            }
+
+            // Assign before subscribing, so the exit handler can always recognise this process.
+            _publisher = process;
+            process.EnableRaisingEvents = true;
+            process.Exited += (sender, _) => OnPublisherExited(sender as Process);
         }
-
-        _publisher = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start FFmpeg. Check that it is on PATH.");
     }
 
     /// <summary>Stops the publisher. MediaMTX drops the stream, just as a camera going offline would.</summary>
     public void Stop()
     {
-        if (_publisher is null) return;
+        Process? process;
+        lock (_gate)
+        {
+            // Clear the field first, so the exit handler ignores the process we are about to kill.
+            process = _publisher;
+            _publisher = null;
+        }
+
+        if (process is null) return;
 
         try
         {
-            if (!_publisher.HasExited)
+            if (!process.HasExited)
             {
-                _publisher.Kill(entireProcessTree: true);
-                _publisher.WaitForExit(3000);
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception ex)
         {
-            // Already exited.
+            ErrorReporter.Report(ex, $"Stopping FFmpeg for {_path}");
         }
         finally
         {
-            _publisher.Dispose();
-            _publisher = null;
+            process.Dispose();
         }
     }
 
     /// <summary>Simulates a camera dropping off the network for a period, then coming back.</summary>
     public async Task SimulateOutageAsync(TimeSpan downtime, CancellationToken ct = default)
     {
+        ThrowIfDisposed();
+
+        if (downtime <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(downtime), "Downtime must be positive.");
+
         Stop();
-        await Task.Delay(downtime, ct);
-        Start();
+
+        try
+        {
+            await Task.Delay(downtime, ct);
+        }
+        finally
+        {
+            // Bring the camera back even if the wait was cancelled, unless it was disposed meanwhile.
+            if (!_disposed)
+                Start();
+        }
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Stop();
+    }
+
+    private void OnPublisherExited(Process? process)
+    {
+        try
+        {
+            int exitCode;
+            lock (_gate)
+            {
+                if (process is null || !ReferenceEquals(process, _publisher))
+                    return;                         // We stopped it ourselves, or it was replaced.
+
+                exitCode = process.ExitCode;
+                _publisher = null;
+                process.Dispose();
+            }
+
+            PublisherExited?.Invoke(this, exitCode);
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"FFmpeg exit handler for {_path}");
+        }
+    }
+
+    private static bool IsProcessRunning(Process process)
+    {
+        try
+        {
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(MockCamera));
+    }
 }

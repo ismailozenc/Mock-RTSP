@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 
@@ -8,6 +10,7 @@ public sealed class MediaMtxServer : IDisposable
 {
     private readonly Process _process;
     private readonly string _workDir;
+    private bool _disposed;
 
     public int Port { get; }
 
@@ -18,6 +21,22 @@ public sealed class MediaMtxServer : IDisposable
         Port = port;
     }
 
+    public bool IsRunning
+    {
+        get
+        {
+            if (_disposed) return false;
+            try
+            {
+                return !_process.HasExited;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+            {
+                return false;
+            }
+        }
+    }
+
     public string BuildUrl(string path) => $"rtsp://127.0.0.1:{Port}/{path.TrimStart('/')}";
 
     public static async Task<MediaMtxServer> StartAsync(
@@ -26,44 +45,65 @@ public sealed class MediaMtxServer : IDisposable
         TimeSpan? readyTimeout = null,
         CancellationToken ct = default)
     {
-        string exe = mediaMtxPath ?? ExtractEmbeddedBinary();
+        // RTP and RTCP use port+1000 and port+1001, so the port must leave room for them.
+        if (port < 1025 || port > 65535 - 1001)
+            throw new ArgumentOutOfRangeException(nameof(port),
+                "Port must be between 1025 and 64534 (RTP and RTCP use port + 1000 and port + 1001).");
 
+        EnsurePortFree(port);
+
+        string exe = mediaMtxPath ?? ExtractEmbeddedBinary();
         string workDir = Path.Combine(Path.GetTempPath(), "mock-rtsp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
 
-        string configPath = Path.Combine(workDir, "mediamtx.yml");
-        await File.WriteAllTextAsync(configPath, BuildConfig(port), ct);
+        Process? process = null;
+        MediaMtxServer? server = null;
 
-        var psi = new ProcessStartInfo(exe, $"\"{configPath}\"")
-        {
-            WorkingDirectory = workDir,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start MediaMTX.");
-
-        // Drain output so the server never blocks on a full pipe.
-        process.OutputDataReceived += (_, e) => Debug.WriteLine(e.Data);
-        process.ErrorDataReceived += (_, e) => Debug.WriteLine(e.Data);
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        var server = new MediaMtxServer(process, workDir, port);
         try
         {
+            string configPath = Path.Combine(workDir, "mediamtx.yml");
+            await File.WriteAllTextAsync(configPath, BuildConfig(port), ct);
+
+            var psi = new ProcessStartInfo(exe, $"\"{configPath}\"")
+            {
+                WorkingDirectory = workDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            process = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start MediaMTX.");
+
+            // Drain output so the server never blocks on a full pipe.
+            process.OutputDataReceived += (_, e) => Debug.WriteLine(e.Data);
+            process.ErrorDataReceived += (_, e) => Debug.WriteLine(e.Data);
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            server = new MediaMtxServer(process, workDir, port);
             await WaitForPortAsync(process, port, readyTimeout ?? TimeSpan.FromSeconds(10), ct);
+            return server;
         }
-        catch
+        catch (Exception ex)
         {
-            server.Dispose();
+            if (server is not null)
+            {
+                server.Dispose();                   // also kills the process and removes workDir
+            }
+            else
+            {
+                KillQuietly(process);
+                DeleteDirQuietly(workDir);
+            }
+
+            if (ex is Win32Exception win32)
+                throw new InvalidOperationException(
+                    $"Could not run MediaMTX at '{exe}'. Check the path and that it is a Windows executable.", win32);
+
             throw;
         }
-
-        return server;
     }
 
     private static string BuildConfig(int port) => $"""
@@ -83,6 +123,31 @@ public sealed class MediaMtxServer : IDisposable
           all_others:
         """;
 
+    private static void EnsurePortFree(int port)
+    {
+        TcpListener? listener = null;
+        try
+        {
+            listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            throw new InvalidOperationException($"Port {port} is already in use. Choose another port.", ex);
+        }
+        finally
+        {
+            try
+            {
+                listener?.Stop();
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, "Releasing port probe");
+            }
+        }
+    }
+
     private static async Task WaitForPortAsync(
         Process process, int port, TimeSpan timeout, CancellationToken ct)
     {
@@ -94,12 +159,12 @@ public sealed class MediaMtxServer : IDisposable
 
             if (process.HasExited)
                 throw new InvalidOperationException(
-                    $"MediaMTX exited with code {process.ExitCode}. Port {port} may already be in use.");
+                    $"MediaMTX exited with code {process.ExitCode}. Check the config and the log output.");
 
             try
             {
                 using var client = new TcpClient();
-                await client.ConnectAsync("127.0.0.1", port, ct);
+                await client.ConnectAsync(IPAddress.Loopback, port, ct);
                 return;
             }
             catch (SocketException)
@@ -123,9 +188,9 @@ public sealed class MediaMtxServer : IDisposable
 
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
             ?? throw new FileNotFoundException(
-                $"Embedded resource '{resourceName}' not found. Pass mediaMtxPath explicitly.");
+                "MediaMTX is not embedded in this build. Choose mediamtx.exe in the MediaMTX field.");
 
-        // Write to a unique temp file first, then move, so parallel test runs don't collide.
+        // Write to a unique temp file first, then move, so parallel runs don't collide.
         string tmp = target + "." + Guid.NewGuid().ToString("N");
         using (var file = File.Create(tmp))
             stream.CopyTo(file);
@@ -134,32 +199,47 @@ public sealed class MediaMtxServer : IDisposable
         return target;
     }
 
-    public void Dispose()
+    private static void KillQuietly(Process? process)
     {
-        try
-        {
-            if (!_process.HasExited)
-            {
-                _process.Kill(entireProcessTree: true);
-                _process.WaitForExit(3000);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // Already exited.
-        }
-        finally
-        {
-            _process.Dispose();
-        }
+        if (process is null) return;
 
         try
         {
-            Directory.Delete(_workDir, recursive: true);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            // Temp cleanup is best-effort.
+            ErrorReporter.Report(ex, "Stopping MediaMTX");
         }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static void DeleteDirQuietly(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"Removing temp folder {dir}");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        KillQuietly(_process);
+        DeleteDirQuietly(_workDir);
     }
 }
