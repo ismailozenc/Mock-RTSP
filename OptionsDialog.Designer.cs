@@ -291,7 +291,7 @@ public sealed partial class OptionsDialog
 
         _lblKeyframe.AutoSize = true;
         _lblKeyframe.Margin = new Padding(12, 6, 10, 0);
-        _lblKeyframe.Text = "Keyframe interval (frames, 0 = default):";
+        _lblKeyframe.Text = "Keyframe interval (frames, 0 = every second):";
 
         _keyframe.Margin = new Padding(0, 3, 0, 3);
         _keyframe.Maximum = 1000;
@@ -512,7 +512,7 @@ public sealed partial class OptionsDialog
         _tips.SetToolTip(_loop, "Replay the video from the start when it reaches the end. Off stops the camera after one pass.");
         _tips.SetToolTip(_realTime, "Sends frames at their normal rate. Turn off to send as fast as possible.");
         _tips.SetToolTip(_reEncode, "Needed for the resolution, frame rate, bitrate and keyframe settings.");
-        _tips.SetToolTip(_keyframe, "Shorter intervals let a viewer start playback sooner, at a higher bitrate.");
+        _tips.SetToolTip(_keyframe, "A new viewer shows nothing until the next keyframe. 0 sends one every second, so playback starts within about a second.");
         _tips.SetToolTip(_transports, "Which transports MediaMTX accepts from viewers. TCP is the most reliable.");
         _tips.SetToolTip(_viewerUser, "Set both a username and a password to require a login for viewers.");
         _tips.SetToolTip(_publisherUser, "Set both a username and a password to require a login for the publisher.");
