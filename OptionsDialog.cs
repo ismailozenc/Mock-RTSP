@@ -92,6 +92,16 @@ public sealed partial class OptionsDialog : Form
 
     private void ApplyToOptions()
     {
+        // Commit typed numbers first. Committing a changed encoding value ticks Re-encode,
+        // so this must happen before Re-encode is read below.
+        CommitTyped(_bitrate);
+        CommitTyped(_keyframe);
+        CommitTyped(_width);
+        CommitTyped(_height);
+        CommitTyped(_frameRate);
+        CommitTyped(_readTimeout);
+        CommitTyped(_writeTimeout);
+
         _working.Loop = _loop.Checked;
         _working.RealTime = _realTime.Checked;
         _working.DropAudio = _dropAudio.Checked;
@@ -113,6 +123,19 @@ public sealed partial class OptionsDialog : Form
         _working.ViewerPassword = _viewerPassword.Text;
         _working.PublisherUser = _publisherUser.Text.Trim();
         _working.PublisherPassword = _publisherPassword.Text;
+    }
+
+    /// <summary>
+    /// A NumericUpDown only takes a typed number when focus leaves the box, so a value typed
+    /// just before pressing Enter or clicking OK could be lost. Read the typed text directly.
+    /// </summary>
+    private static void CommitTyped(NumericUpDown box)
+    {
+        if (decimal.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Integer | System.Globalization.NumberStyles.AllowThousands,
+                System.Globalization.CultureInfo.CurrentCulture, out decimal typed))
+        {
+            box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, typed));
+        }
     }
 
     private void UpdateEnabled()

@@ -217,8 +217,10 @@ public sealed partial class MainForm
         MinimumSize = new Size(900, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MockRtsp - mock RTSP camera";
-        Controls.Add(_status);      // status bar first so the Fill panel docks correctly
+        // Docking runs from the last added control to the first, so the edge-docked status bar
+        // must be added after the Fill panel. Otherwise the panel runs underneath it.
         Controls.Add(_root);
+        Controls.Add(_status);
 
         _serverRow.ResumeLayout(false);
         _cameraRow.ResumeLayout(false);
