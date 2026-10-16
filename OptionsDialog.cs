@@ -15,9 +15,24 @@ public sealed partial class OptionsDialog : Form
     {
     }
 
-    public OptionsDialog(StreamOptions current)
+    public OptionsDialog(StreamOptions current) : this(current, cameraOnly: false)
+    {
+    }
+
+    /// <param name="cameraOnly">
+    /// True for editing one running camera's quality. Hides the MediaMTX tab, because
+    /// those settings only apply when the server starts.
+    /// </param>
+    public OptionsDialog(StreamOptions current, bool cameraOnly)
     {
         InitializeComponent();
+
+        if (cameraOnly)
+        {
+            _tabs.TabPages.Remove(_tabMtx);
+            _ffIntro.Text = "How this camera's video is sent. Saving restarts the camera, so viewers see a short drop.";
+            Text = "Camera quality";
+        }
 
         _working = current.Clone();
         Result = _working;
