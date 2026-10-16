@@ -312,7 +312,7 @@ public sealed class MainForm : Form
 
         await RunBusyAsync(async () =>
         {
-            _server = await MediaMtxServer.StartAsync(port, exe);
+            _server = await MediaMtxServer.StartAsync(port, exe, log: Log);
         });
 
         Log($"MediaMTX listening on rtsp://127.0.0.1:{port}");

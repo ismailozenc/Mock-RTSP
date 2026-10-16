@@ -43,16 +43,22 @@ public sealed class MediaMtxServer : IDisposable
         int port = 8554,
         string? mediaMtxPath = null,
         TimeSpan? readyTimeout = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Action<string>? log = null)
     {
         // RTP and RTCP use port+1000 and port+1001, so the port must leave room for them.
         if (port < 1025 || port > 65535 - 1001)
             throw new ArgumentOutOfRangeException(nameof(port),
                 "Port must be between 1025 and 64534 (RTP and RTCP use port + 1000 and port + 1001).");
 
-        EnsurePortFree(port);
-
         string exe = mediaMtxPath ?? ExtractEmbeddedBinary();
+
+        // Leftovers from an earlier run would hold the ports, so end them before checking.
+        int stopped = StopStaleInstances(exe);
+        if (stopped > 0)
+            log?.Invoke($"Stopped {stopped} leftover MediaMTX process(es) from an earlier run.");
+
+        EnsurePortFree(port);
         string workDir = Path.Combine(Path.GetTempPath(), "mock-rtsp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
 
@@ -122,6 +128,39 @@ public sealed class MediaMtxServer : IDisposable
         paths:
           all_others:
         """;
+
+    /// <summary>
+    /// Ends mediamtx processes started from the same executable path as the one about to run.
+    /// Other MediaMTX instances (different path, or started by another user) are left alone.
+    /// </summary>
+    private static int StopStaleInstances(string exe)
+    {
+        string target = Path.GetFullPath(exe);
+        int stopped = 0;
+
+        foreach (var process in Process.GetProcessesByName("mediamtx"))
+        {
+            using (process)
+            {
+                try
+                {
+                    string? path = process.MainModule?.FileName;
+                    if (path is null || !string.Equals(path, target, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(3000);
+                    stopped++;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+                {
+                    // Already exited, or not ours to inspect. Either way, skip it.
+                }
+            }
+        }
+
+        return stopped;
+    }
 
     private static void EnsurePortFree(int port)
     {
