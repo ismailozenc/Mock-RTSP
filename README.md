@@ -24,6 +24,8 @@ dotnet run --project MockRtsp.csproj
 3. Select the camera and click **Start**. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 4. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
+The MediaMTX and FFmpeg paths are remembered in `%APPDATA%\MockRtsp\settings.ini` until you change them. Clear a field to go back to the embedded MediaMTX or to `ffmpeg` on PATH.
+
 Errors are shown in a dialog and in the log. Unexpected errors are also written to `%LOCALAPPDATA%\MockRtsp\errors.log`.
 
 ## Notes
