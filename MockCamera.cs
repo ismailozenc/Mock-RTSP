@@ -10,7 +10,7 @@ public sealed class MockCamera : IDisposable
     private readonly string _path;
     private readonly string _sourceFile;
     private readonly string _ffmpegPath;
-    private readonly StreamOptions _options;
+    private StreamOptions _options;             // Guarded by _gate. Replaced by ApplyOptions.
     private Process? _publisher;
     private bool _disposed;
 
@@ -51,7 +51,59 @@ public sealed class MockCamera : IDisposable
         _ffmpegPath = ffmpegPath;
     }
 
+    /// <summary>The camera's URL without login details. Safe to show in the log.</summary>
     public string Url => _server.BuildUrl(_path);
+
+    /// <summary>The URL a viewer uses, including the viewer login when one is set.</summary>
+    public string ViewerUrl
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _server.BuildUrl(_path, _options.ViewerUser, _options.ViewerPassword);
+            }
+        }
+    }
+
+    /// <summary>A copy of the current FFmpeg settings for this camera.</summary>
+    public StreamOptions Options
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _options.Clone();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Replaces the FFmpeg settings. A running camera is restarted so the change takes effect,
+    /// which means viewers see a short drop while it reconnects.
+    /// </summary>
+    public void ApplyOptions(StreamOptions options)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(options);
+
+        var copy = options.Clone();
+        var problems = copy.Validate();
+        if (problems.Count > 0)
+            throw new ArgumentException(string.Join(" ", problems), nameof(options));
+
+        bool wasRunning = IsOnline;
+
+        Stop();
+
+        lock (_gate)
+        {
+            _options = copy;
+        }
+
+        if (wasRunning)
+            Start();
+    }
 
     public bool IsOnline
     {
@@ -83,7 +135,10 @@ public sealed class MockCamera : IDisposable
                 CreateNoWindow = true
             };
 
-            foreach (var arg in _options.FfmpegArguments(_sourceFile, Url))
+            // FFmpeg must send the publisher login, or MediaMTX refuses the stream.
+            string publishUrl = _server.BuildUrl(_path, _options.PublisherUser, _options.PublisherPassword);
+
+            foreach (var arg in _options.FfmpegArguments(_sourceFile, publishUrl))
             {
                 psi.ArgumentList.Add(arg);
             }

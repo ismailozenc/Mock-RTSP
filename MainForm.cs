@@ -56,6 +56,7 @@ public sealed partial class MainForm : Form
         Log(_ffmpegExe is not null
             ? $"FFmpeg: {_ffmpegExe}"
             : $"FFmpeg not found. Put ffmpeg.exe in the '{Toolchain.FfmpegFolder}' folder next to MockRtsp.exe.");
+        RefreshRecentFiles();
         Log("Start the MediaMTX server, then add cameras.");
     }
 
@@ -79,6 +80,10 @@ public sealed partial class MainForm : Form
     private void OnOptionsClick(object? sender, EventArgs e) => Safe(EditOptions, "Stream options");
 
     private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
+
+    private void OnOpenVlcClick(object? sender, EventArgs e) => Safe(OpenInVlc, "Open in VLC");
+
+    private void OnQualityClick(object? sender, EventArgs e) => Safe(EditCameraQuality, "Camera quality");
 
     private void OnStartCameraClick(object? sender, EventArgs e) => Safe(StartSelectedCamera, "Start camera");
 
@@ -257,8 +262,52 @@ public sealed partial class MainForm : Form
         _cameras.Items.Add(entry);
         _cameras.SelectedItem = entry;
 
+        RecentFiles.Add(source);
+        RefreshRecentFiles();
+
         Log($"Added camera {camera.Url}");
         UpdateButtons();
+    }
+
+    private void OpenInVlc()
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+
+        if (!entry.Camera.IsOnline)
+            throw new InvalidOperationException("Start the camera first, then open it in VLC.");
+
+        string vlc = VlcLauncher.Find()
+            ?? throw new FileNotFoundException(
+                "VLC was not found. Install VLC, or put vlc.exe in a 'vlc' folder next to MockRtsp.exe.");
+
+        VlcLauncher.Open(vlc, entry.Camera.ViewerUrl);
+        Log($"Opened {entry.Camera.Url} in VLC.");
+    }
+
+    private void EditCameraQuality()
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+
+        using var dialog = new OptionsDialog(entry.Camera.Options, cameraOnly: true);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        bool wasOnline = entry.Camera.IsOnline;
+        entry.Camera.ApplyOptions(dialog.Result);
+
+        Log(wasOnline
+            ? $"Quality saved for '{entry.StreamPath}'. Camera restarted with the new settings."
+            : $"Quality saved for '{entry.StreamPath}'. It applies when the camera starts.");
+        UpdateButtons();
+    }
+
+    private void RefreshRecentFiles()
+    {
+        string current = _sourceFile.Text;
+
+        _sourceFile.Items.Clear();
+        _sourceFile.Items.AddRange(RecentFiles.Load().ToArray());
+        _sourceFile.Text = current;
     }
 
     private void StartSelectedCamera()
@@ -362,6 +411,8 @@ public sealed partial class MainForm : Form
         _startCamera.Enabled = !_busy && selected is not null && !selectedOnline;
         _stopCamera.Enabled = !_busy && selected is not null && selectedOnline;
         _removeCamera.Enabled = !_busy && selected is not null;
+        _quality.Enabled = !_busy && selected is not null;
+        _openVlc.Enabled = !_busy && selectedOnline;
         _outage.Enabled = !_busy && selected is not null;
 
         _statusText.Text = serverUp

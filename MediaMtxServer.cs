@@ -37,7 +37,17 @@ public sealed class MediaMtxServer : IDisposable
         }
     }
 
-    public string BuildUrl(string path) => $"rtsp://127.0.0.1:{Port}/{path.TrimStart('/')}";
+    public string BuildUrl(string path) => BuildUrl(path, null, null);
+
+    /// <summary>Builds an rtsp:// URL. Login details go in the user part when a user name is given.</summary>
+    public string BuildUrl(string path, string? user, string? password)
+    {
+        string login = string.IsNullOrEmpty(user)
+            ? string.Empty
+            : $"{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(password ?? string.Empty)}@";
+
+        return $"rtsp://{login}127.0.0.1:{Port}/{path.TrimStart('/')}";
+    }
 
     /// <param name="mediaMtxPath">Full path to mediamtx.exe.</param>
     /// <param name="log">Optional callback for status messages.</param>

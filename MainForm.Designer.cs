@@ -15,7 +15,7 @@ public sealed partial class MainForm
     private Label _lblStreamPath = null!;
     private TextBox _streamPath = null!;
     private Label _lblVideo = null!;
-    private TextBox _sourceFile = null!;
+    private ComboBox _sourceFile = null!;
     private Button _browseVideo = null!;
     private Button _addCamera = null!;
     private ListBox _cameras = null!;
@@ -23,6 +23,8 @@ public sealed partial class MainForm
     private Button _startCamera = null!;
     private Button _stopCamera = null!;
     private Button _removeCamera = null!;
+    private Button _quality = null!;
+    private Button _openVlc = null!;
     private Label _lblOutage = null!;
     private NumericUpDown _outageSeconds = null!;
     private Button _outage = null!;
@@ -56,7 +58,7 @@ public sealed partial class MainForm
         _lblStreamPath = new Label();
         _streamPath = new TextBox();
         _lblVideo = new Label();
-        _sourceFile = new TextBox();
+        _sourceFile = new ComboBox();
         _browseVideo = new Button();
         _addCamera = new Button();
         _cameras = new ListBox();
@@ -64,6 +66,8 @@ public sealed partial class MainForm
         _startCamera = new Button();
         _stopCamera = new Button();
         _removeCamera = new Button();
+        _quality = new Button();
+        _openVlc = new Button();
         _lblOutage = new Label();
         _outageSeconds = new NumericUpDown();
         _outage = new Button();
@@ -113,6 +117,7 @@ public sealed partial class MainForm
         _lblVideo.AutoSize = true;
         _lblVideo.Margin = new Padding(6, 6, 2, 0);
         _lblVideo.Text = "Video file:";
+        _sourceFile.DropDownStyle = ComboBoxStyle.DropDown;   // typed paths allowed; recent files in the list
         _sourceFile.Width = 360;
         _browseVideo.AutoSize = true;
         _browseVideo.Text = "Browse...";
@@ -137,6 +142,10 @@ public sealed partial class MainForm
         _stopCamera.Text = "Stop";
         _removeCamera.AutoSize = true;
         _removeCamera.Text = "Remove";
+        _quality.AutoSize = true;
+        _quality.Text = "Quality...";
+        _openVlc.AutoSize = true;
+        _openVlc.Text = "Open in VLC";
         _lblOutage.AutoSize = true;
         _lblOutage.Margin = new Padding(6, 6, 2, 0);
         _lblOutage.Text = "Outage (s):";
@@ -151,7 +160,7 @@ public sealed partial class MainForm
         _actionsRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _actionsRow.Margin = new Padding(0, 0, 0, 4);
         _actionsRow.WrapContents = true;
-        _actionsRow.Controls.AddRange(new Control[] { _startCamera, _stopCamera, _removeCamera, _lblOutage, _outageSeconds, _outage });
+        _actionsRow.Controls.AddRange(new Control[] { _startCamera, _stopCamera, _removeCamera, _quality, _openVlc, _lblOutage, _outageSeconds, _outage });
 
         // Log
         _log.Dock = DockStyle.Fill;
@@ -190,6 +199,8 @@ public sealed partial class MainForm
         _startCamera.Click += new EventHandler(OnStartCameraClick);
         _stopCamera.Click += new EventHandler(OnStopCameraClick);
         _removeCamera.Click += new EventHandler(OnRemoveCameraClick);
+        _quality.Click += new EventHandler(OnQualityClick);
+        _openVlc.Click += new EventHandler(OnOpenVlcClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _cameras.SelectedIndexChanged += new EventHandler(OnCamerasSelectedIndexChanged);
 
