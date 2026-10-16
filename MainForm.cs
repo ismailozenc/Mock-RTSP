@@ -1,6 +1,6 @@
 namespace MockRtsp;
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private sealed class CameraEntry
     {
@@ -19,60 +19,33 @@ public sealed class MainForm : Form
             $"{(Camera.IsOnline ? "[ON]  " : "[off] ")}{StreamPath}    ({Path.GetFileName(SourceFile)})";
     }
 
-    // Found at startup in the "mediamtx" and "ffmpeg" folders next to the program. Null if missing.
-    private readonly string? _mediaMtxExe;
-    private readonly string? _ffmpegExe;
+    // Found in the "mediamtx" and "ffmpeg" folders next to the program when the form loads. Null if missing.
+    private string? _mediaMtxExe;
+    private string? _ffmpegExe;
 
-    // Server row
-    private readonly NumericUpDown _port = new() { Minimum = 1025, Maximum = 64534, Value = 8554, Width = 80 };
-    private readonly Button _startServer = new() { Text = "Start server", AutoSize = true };
-    private readonly Button _stopServer = new() { Text = "Stop server", AutoSize = true };
-    private readonly Button _optionsButton = new() { Text = "Stream options...", AutoSize = true };
-
-    // Add camera row
-    private readonly TextBox _streamPath = new() { Text = "Streaming/Channels/101", Width = 220 };
-    private readonly TextBox _sourceFile = new() { Width = 360 };
-    private readonly Button _browseVideo = new() { Text = "Browse...", AutoSize = true };
-    private readonly Button _addCamera = new() { Text = "Add camera", AutoSize = true };
-
-    // Camera list and actions
-    private readonly ListBox _cameras = new() { Dock = DockStyle.Fill, IntegralHeight = false };
-    private readonly Button _startCamera = new() { Text = "Start", AutoSize = true };
-    private readonly Button _stopCamera = new() { Text = "Stop", AutoSize = true };
-    private readonly Button _removeCamera = new() { Text = "Remove", AutoSize = true };
-    private readonly NumericUpDown _outageSeconds = new() { Minimum = 1, Maximum = 3600, Value = 5, Width = 70 };
-    private readonly Button _outage = new() { Text = "Simulate outage", AutoSize = true };
-
-    // Log and status
-    private readonly TextBox _log = new()
-    {
-        Multiline = true,
-        ReadOnly = true,
-        ScrollBars = ScrollBars.Vertical,
-        Dock = DockStyle.Fill,
-        Font = new Font("Consolas", 9F)
-    };
-    private readonly ToolStripStatusLabel _statusText = new() { Text = "Server stopped" };
-    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
-
+    private StreamOptions _options = new();
     private readonly List<CameraEntry> _entries = new();
     private MediaMtxServer? _server;
     private bool _busy;
-    private StreamOptions _options = new();
 
     public MainForm()
     {
-        Text = "MockRtsp - mock RTSP camera";
-        StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1000, 720);
-        MinimumSize = new Size(900, 600);
+        InitializeComponent();
+    }
+
+    private CameraEntry? SelectedEntry => _cameras.SelectedItem as CameraEntry;
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+
+        // The designer runs this form too, and must not look for tools or start the timer.
+        if (DesignMode)
+            return;
 
         // Auto setup: look for the bundled tools once, at startup.
         _mediaMtxExe = Toolchain.Find(Toolchain.MediaMtxFolder, "mediamtx.exe");
         _ffmpegExe = Toolchain.Find(Toolchain.FfmpegFolder, "ffmpeg.exe");
-
-        BuildLayout();
-        WireEvents();
 
         _timer.Start();
         UpdateButtons();
@@ -86,76 +59,55 @@ public sealed class MainForm : Form
         Log("Start the MediaMTX server, then add cameras.");
     }
 
-    private CameraEntry? SelectedEntry => _cameras.SelectedItem as CameraEntry;
-
-    private void BuildLayout()
+    protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 5,
-            Padding = new Padding(8)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // server row
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // add camera row
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));   // camera list
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // camera actions
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));   // log
+        if (!DesignMode)
+            Safe(StopServer, "Shutdown");
 
-        root.Controls.Add(Row(
-            Caption("Port:"), _port, _startServer, _stopServer, _optionsButton), 0, 0);
-
-        root.Controls.Add(Row(
-            Caption("Stream path:"), _streamPath,
-            Caption("Video file:"), _sourceFile, _browseVideo, _addCamera), 0, 1);
-
-        root.Controls.Add(_cameras, 0, 2);
-
-        root.Controls.Add(Row(
-            _startCamera, _stopCamera, _removeCamera,
-            Caption("Outage (s):"), _outageSeconds, _outage), 0, 3);
-
-        root.Controls.Add(_log, 0, 4);
-
-        // StatusStrip docks to the bottom. Add it before the Fill panel so the layout is correct.
-        var status = new StatusStrip();
-        status.Items.Add(_statusText);
-        Controls.Add(status);
-        Controls.Add(root);
+        base.OnFormClosing(e);
     }
 
-    private static FlowLayoutPanel Row(params Control[] controls)
+    // ---- Event handlers (wired in MainForm.Designer.cs) ----
+
+    private void OnBrowseVideoClick(object? sender, EventArgs e) => Safe(BrowseVideo, "Browse for video");
+
+    private async void OnStartServerClick(object? sender, EventArgs e) =>
+        await SafeAsync(StartServerAsync, "Start server");
+
+    private void OnStopServerClick(object? sender, EventArgs e) => Safe(StopServer, "Stop server");
+
+    private void OnOptionsClick(object? sender, EventArgs e) => Safe(EditOptions, "Stream options");
+
+    private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
+
+    private void OnStartCameraClick(object? sender, EventArgs e) => Safe(StartSelectedCamera, "Start camera");
+
+    private void OnStopCameraClick(object? sender, EventArgs e) => Safe(StopSelectedCamera, "Stop camera");
+
+    private void OnRemoveCameraClick(object? sender, EventArgs e) => Safe(RemoveSelectedCamera, "Remove camera");
+
+    private async void OnOutageClick(object? sender, EventArgs e) =>
+        await SafeAsync(SimulateOutageAsync, "Simulate outage");
+
+    private void OnCamerasSelectedIndexChanged(object? sender, EventArgs e) => UpdateButtons();
+
+    private void OnTimerTick(object? sender, EventArgs e)
     {
-        var panel = new FlowLayoutPanel
+        try
         {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = true,
-            Margin = new Padding(0, 0, 0, 4)
-        };
-        panel.Controls.AddRange(controls);
-        return panel;
-    }
+            if (_server is not null && !_server.IsRunning)
+            {
+                Log("MediaMTX stopped unexpectedly. All cameras were stopped.");
+                StopServer();
+            }
 
-    private static Label Caption(string text) =>
-        new() { Text = text, AutoSize = true, Margin = new Padding(6, 6, 2, 0) };
-
-    private void WireEvents()
-    {
-        _browseVideo.Click += (_, _) => Safe(BrowseVideo, "Browse for video");
-        _startServer.Click += async (_, _) => await SafeAsync(StartServerAsync, "Start server");
-        _stopServer.Click += (_, _) => Safe(StopServer, "Stop server");
-        _optionsButton.Click += (_, _) => Safe(EditOptions, "Stream options");
-        _addCamera.Click += (_, _) => Safe(AddCamera, "Add camera");
-        _startCamera.Click += (_, _) => Safe(StartSelectedCamera, "Start camera");
-        _stopCamera.Click += (_, _) => Safe(StopSelectedCamera, "Stop camera");
-        _removeCamera.Click += (_, _) => Safe(RemoveSelectedCamera, "Remove camera");
-        _outage.Click += async (_, _) => await SafeAsync(SimulateOutageAsync, "Simulate outage");
-        _cameras.SelectedIndexChanged += (_, _) => UpdateButtons();
-        _timer.Tick += (_, _) => OnTimerTick();
-        FormClosing += (_, _) => Safe(StopServer, "Shutdown");
+            _cameras.Invalidate();      // refresh [ON]/[off] labels
+            UpdateButtons();
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "Status timer");
+        }
     }
 
     // ---- Error handling wrappers: every UI action goes through one of these ----
@@ -189,38 +141,6 @@ public sealed class MainForm : Form
         ErrorReporter.Report(ex, context);
         Log($"ERROR ({context}): {ex.Message}");
         MessageBox.Show(this, ex.Message, context, MessageBoxButtons.OK, MessageBoxIcon.Error);
-    }
-
-    private void OnTimerTick()
-    {
-        try
-        {
-            if (_server is not null && !_server.IsRunning)
-            {
-                Log("MediaMTX stopped unexpectedly. All cameras were stopped.");
-                StopServer();
-            }
-
-            _cameras.Invalidate();      // refresh [ON]/[off] labels
-            UpdateButtons();
-        }
-        catch (Exception ex)
-        {
-            ErrorReporter.Report(ex, "Status timer");
-        }
-    }
-
-    // ---- Stream options ----
-
-    private void EditOptions()
-    {
-        using var dialog = new OptionsDialog(_options);
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
-
-        _options = dialog.Result;
-        Log("Stream options saved. MediaMTX settings apply the next time the server starts. " +
-            "FFmpeg settings apply to cameras added from now on.");
     }
 
     // ---- Tool checks ----
@@ -384,6 +304,17 @@ public sealed class MainForm : Form
         UpdateButtons();
     }
 
+    private void EditOptions()
+    {
+        using var dialog = new OptionsDialog(_options);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _options = dialog.Result;
+        Log("Stream options saved. MediaMTX settings apply the next time the server starts. " +
+            "FFmpeg settings apply to cameras added from now on.");
+    }
+
     private void DisposeCamera(CameraEntry entry)
     {
         try
@@ -461,16 +392,5 @@ public sealed class MainForm : Form
             _log.Clear();
 
         _log.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _timer.Stop();
-            _timer.Dispose();
-        }
-
-        base.Dispose(disposing);
     }
 }
