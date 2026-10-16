@@ -125,26 +125,33 @@ public sealed class MediaMtxServer : IDisposable
 
     private static void EnsurePortFree(int port)
     {
-        TcpListener? listener = null;
+        // MediaMTX binds TCP for RTSP and UDP for RTP and RTCP, so all three must be free.
+        CheckPort(port, ProtocolType.Tcp, "RTSP");
+        CheckPort(port + 1000, ProtocolType.Udp, "RTP");
+        CheckPort(port + 1001, ProtocolType.Udp, "RTCP");
+    }
+
+    private static void CheckPort(int port, ProtocolType protocol, string purpose)
+    {
         try
         {
-            listener = new TcpListener(IPAddress.Loopback, port);
-            listener.Start();
+            if (protocol == ProtocolType.Tcp)
+            {
+                var listener = new TcpListener(IPAddress.Any, port);
+                listener.Start();
+                listener.Stop();
+            }
+            else
+            {
+                using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, port));
+            }
         }
         catch (SocketException ex)
         {
-            throw new InvalidOperationException($"Port {port} is already in use. Choose another port.", ex);
-        }
-        finally
-        {
-            try
-            {
-                listener?.Stop();
-            }
-            catch (Exception ex)
-            {
-                ErrorReporter.Report(ex, "Releasing port probe");
-            }
+            throw new InvalidOperationException(
+                $"The {purpose} port {port} is already in use by another program. This is often a " +
+                "MediaMTX process left running from an earlier session. End mediamtx.exe in Task Manager " +
+                "or choose another port.", ex);
         }
     }
 
