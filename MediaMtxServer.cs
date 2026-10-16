@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 namespace MockRtsp;
 
@@ -40,17 +41,24 @@ public sealed class MediaMtxServer : IDisposable
 
     /// <param name="mediaMtxPath">Full path to mediamtx.exe.</param>
     /// <param name="log">Optional callback for status messages.</param>
+    /// <param name="options">Server settings. Null uses the defaults.</param>
     public static async Task<MediaMtxServer> StartAsync(
         int port,
         string mediaMtxPath,
         TimeSpan? readyTimeout = null,
         CancellationToken ct = default,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        StreamOptions? options = null)
     {
         // RTP and RTCP use port+1000 and port+1001, so the port must leave room for them.
         if (port < 1025 || port > 65535 - 1001)
             throw new ArgumentOutOfRangeException(nameof(port),
                 "Port must be between 1025 and 64534 (RTP and RTCP use port + 1000 and port + 1001).");
+
+        var settings = options ?? new StreamOptions();
+        var problems = settings.Validate();
+        if (problems.Count > 0)
+            throw new ArgumentException(string.Join(" ", problems), nameof(options));
 
         string exe = mediaMtxPath;
 
@@ -70,7 +78,7 @@ public sealed class MediaMtxServer : IDisposable
         try
         {
             string configPath = Path.Combine(workDir, "mediamtx.yml");
-            await File.WriteAllTextAsync(configPath, BuildConfig(port), ct);
+            await File.WriteAllTextAsync(configPath, BuildConfig(port, settings), ct);
 
             var psi = new ProcessStartInfo(exe, $"\"{configPath}\"")
             {
@@ -114,22 +122,52 @@ public sealed class MediaMtxServer : IDisposable
         }
     }
 
-    private static string BuildConfig(int port) => $"""
-        logLevel: warn
-        rtsp: yes
-        rtspAddress: :{port}
-        rtspTransports: [tcp, udp]
-        rtpAddress: :{port + 1000}
-        rtcpAddress: :{port + 1001}
-        rtmp: no
-        hls: no
-        webrtc: no
-        srt: no
-        api: no
-        metrics: no
-        paths:
-          all_others:
-        """;
+    private static string BuildConfig(int port, StreamOptions options)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine($"logLevel: {options.MediaMtxLogLevel}");
+        sb.AppendLine("rtsp: yes");
+        sb.AppendLine($"rtspAddress: :{port}");
+        sb.AppendLine($"rtspTransports: [{TransportList(options.Transports)}]");
+        sb.AppendLine($"readTimeout: {options.ReadTimeoutSeconds}s");
+        sb.AppendLine($"writeTimeout: {options.WriteTimeoutSeconds}s");
+        sb.AppendLine($"rtpAddress: :{port + 1000}");
+        sb.AppendLine($"rtcpAddress: :{port + 1001}");
+        sb.AppendLine("rtmp: no");
+        sb.AppendLine("hls: no");
+        sb.AppendLine("webrtc: no");
+        sb.AppendLine("srt: no");
+        sb.AppendLine("api: no");
+        sb.AppendLine("metrics: no");
+        sb.AppendLine("paths:");
+        sb.AppendLine("  all_others:");
+
+        if (options.PublisherUser.Length > 0)
+        {
+            sb.AppendLine($"    publishUser: {Quote(options.PublisherUser)}");
+            sb.AppendLine($"    publishPass: {Quote(options.PublisherPassword)}");
+        }
+
+        if (options.ViewerUser.Length > 0)
+        {
+            sb.AppendLine($"    readUser: {Quote(options.ViewerUser)}");
+            sb.AppendLine($"    readPass: {Quote(options.ViewerPassword)}");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string TransportList(RtspTransportMode mode) => mode switch
+    {
+        RtspTransportMode.TcpOnly => "tcp",
+        RtspTransportMode.UdpOnly => "udp",
+        _ => "tcp, udp"
+    };
+
+    /// <summary>Quotes a YAML string, escaping backslashes and double quotes.</summary>
+    private static string Quote(string value) =>
+        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     /// <summary>
     /// Ends mediamtx processes started from the same executable path as the one about to run.

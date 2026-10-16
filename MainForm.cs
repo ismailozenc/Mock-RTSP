@@ -27,6 +27,7 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _port = new() { Minimum = 1025, Maximum = 64534, Value = 8554, Width = 80 };
     private readonly Button _startServer = new() { Text = "Start server", AutoSize = true };
     private readonly Button _stopServer = new() { Text = "Stop server", AutoSize = true };
+    private readonly Button _optionsButton = new() { Text = "Stream options...", AutoSize = true };
 
     // Add camera row
     private readonly TextBox _streamPath = new() { Text = "Streaming/Channels/101", Width = 220 };
@@ -57,6 +58,7 @@ public sealed class MainForm : Form
     private readonly List<CameraEntry> _entries = new();
     private MediaMtxServer? _server;
     private bool _busy;
+    private StreamOptions _options = new();
 
     public MainForm()
     {
@@ -103,7 +105,7 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));   // log
 
         root.Controls.Add(Row(
-            Caption("Port:"), _port, _startServer, _stopServer), 0, 0);
+            Caption("Port:"), _port, _startServer, _stopServer, _optionsButton), 0, 0);
 
         root.Controls.Add(Row(
             Caption("Stream path:"), _streamPath,
@@ -145,6 +147,7 @@ public sealed class MainForm : Form
         _browseVideo.Click += (_, _) => Safe(BrowseVideo, "Browse for video");
         _startServer.Click += async (_, _) => await SafeAsync(StartServerAsync, "Start server");
         _stopServer.Click += (_, _) => Safe(StopServer, "Stop server");
+        _optionsButton.Click += (_, _) => Safe(EditOptions, "Stream options");
         _addCamera.Click += (_, _) => Safe(AddCamera, "Add camera");
         _startCamera.Click += (_, _) => Safe(StartSelectedCamera, "Start camera");
         _stopCamera.Click += (_, _) => Safe(StopSelectedCamera, "Stop camera");
@@ -207,6 +210,19 @@ public sealed class MainForm : Form
         }
     }
 
+    // ---- Stream options ----
+
+    private void EditOptions()
+    {
+        using var dialog = new OptionsDialog(_options);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _options = dialog.Result;
+        Log("Stream options saved. MediaMTX settings apply the next time the server starts. " +
+            "FFmpeg settings apply to cameras added from now on.");
+    }
+
     // ---- Tool checks ----
 
     private string RequireMediaMtx()
@@ -254,7 +270,7 @@ public sealed class MainForm : Form
 
         await RunBusyAsync(async () =>
         {
-            _server = await MediaMtxServer.StartAsync(port, exe, log: Log);
+            _server = await MediaMtxServer.StartAsync(port, exe, log: Log, options: _options.Clone());
         });
 
         Log($"MediaMTX listening on rtsp://127.0.0.1:{port}");
@@ -312,7 +328,7 @@ public sealed class MainForm : Form
         if (!File.Exists(source))
             throw new FileNotFoundException("Video file not found.", source);
 
-        var camera = new MockCamera(_server, path, source, RequireFfmpeg());
+        var camera = new MockCamera(_server, path, source, RequireFfmpeg(), _options.Clone());
         camera.PublisherExited += (_, code) =>
             Log($"FFmpeg for '{path}' exited with code {code}. Stream is down.");
 
@@ -403,6 +419,7 @@ public sealed class MainForm : Form
         bool selectedOnline = selected?.Camera.IsOnline ?? false;
 
         _port.Enabled = !serverUp && !_busy;
+        _optionsButton.Enabled = !_busy;
         _startServer.Enabled = !serverUp && !_busy && _mediaMtxExe is not null;
         _stopServer.Enabled = serverUp && !_busy;
 

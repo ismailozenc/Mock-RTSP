@@ -10,6 +10,7 @@ public sealed class MockCamera : IDisposable
     private readonly string _path;
     private readonly string _sourceFile;
     private readonly string _ffmpegPath;
+    private readonly StreamOptions _options;
     private Process? _publisher;
     private bool _disposed;
 
@@ -22,7 +23,13 @@ public sealed class MockCamera : IDisposable
 
     /// <param name="path">Stream path, e.g. "Streaming/Channels/101" to match Hikvision URLs.</param>
     /// <param name="sourceFile">H.264/H.265 video file to loop. Use real footage from your cameras.</param>
-    public MockCamera(MediaMtxServer server, string path, string sourceFile, string ffmpegPath = "ffmpeg")
+    /// <param name="options">FFmpeg settings for this camera. Null uses the defaults.</param>
+    public MockCamera(
+        MediaMtxServer server,
+        string path,
+        string sourceFile,
+        string ffmpegPath = "ffmpeg",
+        StreamOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(server);
 
@@ -31,6 +38,12 @@ public sealed class MockCamera : IDisposable
 
         if (!File.Exists(sourceFile))
             throw new FileNotFoundException("Source video not found.", sourceFile);
+
+        _options = (options ?? new StreamOptions()).Clone();
+
+        var problems = _options.Validate();
+        if (problems.Count > 0)
+            throw new ArgumentException(string.Join(" ", problems), nameof(options));
 
         _server = server;
         _path = path.Trim().TrimStart('/');
@@ -70,19 +83,7 @@ public sealed class MockCamera : IDisposable
                 CreateNoWindow = true
             };
 
-            // -stream_loop must come before -i. -re paces output at real-time speed.
-            foreach (var arg in new[]
-            {
-                "-hide_banner", "-loglevel", "warning",
-                "-re", "-stream_loop", "-1",
-                "-fflags", "+genpts",
-                "-i", _sourceFile,
-                "-an",                      // drop audio
-                "-c:v", "copy",             // pass the codec through unchanged
-                "-f", "rtsp",
-                "-rtsp_transport", "tcp",
-                Url
-            })
+            foreach (var arg in _options.FfmpegArguments(_sourceFile, Url))
             {
                 psi.ArgumentList.Add(arg);
             }
@@ -96,8 +97,7 @@ public sealed class MockCamera : IDisposable
             catch (Win32Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Could not start FFmpeg ('{_ffmpegPath}'). Install FFmpeg and add it to PATH, " +
-                    "or pass its full path.", ex);
+                    $"Could not start FFmpeg ('{_ffmpegPath}'). Check that ffmpeg.exe is in the ffmpeg folder.", ex);
             }
 
             // Assign before subscribing, so the exit handler can always recognise this process.
