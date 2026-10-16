@@ -23,7 +23,8 @@ public sealed partial class MainForm : Form
     private string? _mediaMtxExe;
     private string? _ffmpegExe;
 
-    private StreamOptions _options = new();
+    private StreamOptions _options = new();         // Saved in options.json. Loaded in OnLoad.
+    private StreamOptions? _serverOptions;          // What the running server was started with.
     private readonly List<CameraEntry> _entries = new();
     private MediaMtxServer? _server;
     private bool _busy;
@@ -42,6 +43,8 @@ public sealed partial class MainForm : Form
         // The designer runs this form too, and must not look for tools or start the timer.
         if (DesignMode)
             return;
+
+        _options = OptionsStore.Load();
 
         // Auto setup: look for the bundled tools once, at startup.
         _mediaMtxExe = Toolchain.Find(Toolchain.MediaMtxFolder, "mediamtx.exe");
@@ -193,9 +196,12 @@ public sealed partial class MainForm : Form
         string exe = RequireMediaMtx();
         int port = (int)_port.Value;
 
+        var started = _options.Clone();
+
         await RunBusyAsync(async () =>
         {
-            _server = await MediaMtxServer.StartAsync(port, exe, log: Log, options: _options.Clone());
+            _server = await MediaMtxServer.StartAsync(port, exe, log: Log, options: started);
+            _serverOptions = started;
         });
 
         Log($"MediaMTX listening on rtsp://127.0.0.1:{port}");
@@ -213,6 +219,7 @@ public sealed partial class MainForm : Form
 
         var server = _server;
         _server = null;
+        _serverOptions = null;
 
         try
         {
@@ -253,7 +260,7 @@ public sealed partial class MainForm : Form
         if (!File.Exists(source))
             throw new FileNotFoundException("Video file not found.", source);
 
-        var camera = new MockCamera(_server, path, source, RequireFfmpeg(), _options.Clone());
+        var camera = new MockCamera(_server, path, source, RequireFfmpeg(), CameraOptions());
         camera.PublisherExited += (_, code) =>
         {
             string output = camera.LastFfmpegOutput;
@@ -364,8 +371,54 @@ public sealed partial class MainForm : Form
             return;
 
         _options = dialog.Result;
-        Log("Stream options saved. MediaMTX settings apply the next time the server starts. " +
-            "FFmpeg settings apply to cameras added from now on.");
+
+        if (!OptionsStore.Save(_options))
+            Log("WARNING: the options could not be saved to disk, so they will be lost when the app closes.");
+
+        // FFmpeg settings apply to every camera now. Running cameras restart.
+        int applied = 0;
+        foreach (var entry in _entries.ToList())
+        {
+            try
+            {
+                entry.Camera.ApplyOptions(CameraOptions());
+                applied++;
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, $"Applying options to {entry.StreamPath}");
+                Log($"ERROR: could not apply the options to '{entry.StreamPath}': {ex.Message}");
+            }
+        }
+
+        Log(applied > 0
+            ? $"Stream options saved and applied to {applied} camera(s). Running cameras were restarted."
+            : "Stream options saved. They apply to cameras you add from now on.");
+
+        if (_server is not null && _serverOptions is not null && !_serverOptions.ServerSettingsEqual(_options))
+            Log("The MediaMTX settings (transports, timeouts, logins, log level) changed. " +
+                "Stop and start the server for them to take effect.");
+
+        UpdateButtons();
+    }
+
+    /// <summary>
+    /// The options for a camera: the saved options, but with the logins the running server
+    /// was started with, because changed logins would be refused until the server restarts.
+    /// </summary>
+    private StreamOptions CameraOptions()
+    {
+        var options = _options.Clone();
+
+        if (_serverOptions is not null)
+        {
+            options.ViewerUser = _serverOptions.ViewerUser;
+            options.ViewerPassword = _serverOptions.ViewerPassword;
+            options.PublisherUser = _serverOptions.PublisherUser;
+            options.PublisherPassword = _serverOptions.PublisherPassword;
+        }
+
+        return options;
     }
 
     private void DisposeCamera(CameraEntry entry)
