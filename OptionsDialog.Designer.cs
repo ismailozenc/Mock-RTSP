@@ -1,3 +1,5 @@
+#nullable enable
+
 namespace MockRtsp;
 
 public sealed partial class OptionsDialog
@@ -190,7 +192,7 @@ public sealed partial class OptionsDialog
         _ffIntro.ForeColor = SystemColors.GrayText;
         _ffIntro.Margin = new Padding(4, 4, 4, 8);
         _ffIntro.MaximumSize = new Size(620, 0);
-        _ffIntro.Text = "How each camera's video is sent. Changes apply to cameras added from now on.";
+        _ffIntro.Text = "Applies to every camera. Running cameras restart with the new settings, and VLC windows opened from this app reopen.";
 
         _ffGrid.AutoSize = true;
         _ffGrid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -413,7 +415,7 @@ public sealed partial class OptionsDialog
         _mtxIntro.ForeColor = SystemColors.GrayText;
         _mtxIntro.Margin = new Padding(4, 4, 4, 8);
         _mtxIntro.MaximumSize = new Size(620, 0);
-        _mtxIntro.Text = "The RTSP server. Changes apply the next time the server starts.";
+        _mtxIntro.Text = "The RTSP server. Changes here apply after you stop and start the server.";
 
         // Network group
         _grpNetwork.AutoSize = true;
@@ -600,7 +602,7 @@ public sealed partial class OptionsDialog
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        Text = "Stream options";
+        Text = "Settings";
         Controls.Add(_bottom);      // bottom panel first so the tab control docks correctly
         Controls.Add(_tabs);
 

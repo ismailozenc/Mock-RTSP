@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace MockRtsp;
 
 public sealed partial class MainForm : Form
@@ -14,6 +16,9 @@ public sealed partial class MainForm : Form
         public string StreamPath { get; }
         public string SourceFile { get; }
         public MockCamera Camera { get; }
+
+        /// <summary>The VLC window opened for this camera, if any. Reopened after a settings change.</summary>
+        public Process? Vlc { get; set; }
 
         public override string ToString() =>
             $"{(Camera.IsOnline ? "[ON]  " : "[off] ")}{StreamPath}    ({Path.GetFileName(SourceFile)})";
@@ -83,13 +88,13 @@ public sealed partial class MainForm : Form
 
     private void OnStopServerClick(object? sender, EventArgs e) => Safe(StopServer, "Stop server");
 
-    private void OnOptionsClick(object? sender, EventArgs e) => Safe(EditOptions, "Stream options");
+    private async void OnOptionsClick(object? sender, EventArgs e) =>
+        await SafeAsync(EditSettingsAsync, "Settings");
 
     private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
 
-    private void OnOpenVlcClick(object? sender, EventArgs e) => Safe(OpenInVlc, "Open in VLC");
-
-    private void OnQualityClick(object? sender, EventArgs e) => Safe(EditCameraQuality, "Camera quality");
+    private async void OnOpenVlcClick(object? sender, EventArgs e) =>
+        await SafeAsync(OpenInVlcAsync, "Open in VLC");
 
     private void OnStartCameraClick(object? sender, EventArgs e) => Safe(StartSelectedCamera, "Start camera");
 
@@ -319,36 +324,86 @@ public sealed partial class MainForm : Form
         }
     }
 
-    private void OpenInVlc()
+    private async Task OpenInVlcAsync()
     {
         var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
 
         if (!entry.Camera.IsOnline)
             throw new InvalidOperationException("Start the camera first, then open it in VLC.");
 
+        // Opening VLC before MediaMTX serves the stream makes VLC show an error, so wait for it.
+        bool live = false;
+        await RunBusyAsync(async () => live = await entry.Camera.WaitUntilLiveAsync(TimeSpan.FromSeconds(10)));
+
+        if (!live)
+            throw new InvalidOperationException(
+                $"The stream for '{entry.StreamPath}' is not playing. Check the log for FFmpeg errors.");
+
+        OpenVlc(entry);
+        Log($"Opened {entry.Camera.Url} in VLC.");
+    }
+
+    /// <summary>Opens VLC for the camera, closing the window it had open before.</summary>
+    private void OpenVlc(CameraEntry entry)
+    {
         string vlc = VlcLauncher.Find()
             ?? throw new FileNotFoundException(
                 "VLC was not found. Install VLC, or put vlc.exe in a 'vlc' folder next to MockRtsp.exe.");
 
-        VlcLauncher.Open(vlc, entry.Camera.ViewerUrl);
-        Log($"Opened {entry.Camera.Url} in VLC.");
+        VlcLauncher.Close(entry.Vlc);
+        entry.Vlc = VlcLauncher.Open(vlc, entry.Camera.ViewerUrl, entry.StreamPath);
     }
 
-    private void EditCameraQuality()
+    /// <summary>
+    /// Restarts a running camera with the current settings, waits until the new stream plays,
+    /// and reopens its VLC window. Viewers are disconnected by the restart, just as with a real
+    /// camera that changes resolution, and VLC does not reconnect by itself.
+    /// </summary>
+    private async Task ApplySettingsToCameraAsync(CameraEntry entry)
     {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+        try
+        {
+            bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
+            bool wasOnline = entry.Camera.IsOnline;
 
-        using var dialog = new OptionsDialog(entry.Camera.Options, cameraOnly: true);
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
+            entry.Camera.ApplyOptions(CameraOptions());
 
-        bool wasOnline = entry.Camera.IsOnline;
-        entry.Camera.ApplyOptions(dialog.Result);
+            if (!wasOnline)
+            {
+                Log($"'{entry.StreamPath}': saved. It uses the new settings when started.");
+                return;
+            }
 
-        Log(wasOnline
-            ? $"Quality saved for '{entry.StreamPath}'. Camera restarted with the new settings."
-            : $"Quality saved for '{entry.StreamPath}'. It applies when the camera starts.");
-        UpdateButtons();
+            if (!await entry.Camera.WaitUntilLiveAsync(TimeSpan.FromSeconds(10)))
+            {
+                Log($"'{entry.StreamPath}': the stream did not come back after the change. See the FFmpeg lines above.");
+                return;
+            }
+
+            Log($"'{entry.StreamPath}': now streaming {Describe(entry.Camera.Options)}.");
+
+            if (hadVlc)
+            {
+                OpenVlc(entry);
+                Log($"'{entry.StreamPath}': VLC reopened on the new stream.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"Applying settings to {entry.StreamPath}");
+            Log($"ERROR: could not apply the settings to '{entry.StreamPath}': {ex.Message}");
+        }
+    }
+
+    private static string Describe(StreamOptions o)
+    {
+        if (!o.ReEncode)
+            return "the original video (not re-encoded)";
+
+        string size = o.Width > 0 ? o.Width + "x" + o.Height : "original size";
+        string rate = o.FrameRate > 0 ? o.FrameRate + " fps" : "original frame rate";
+        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
+        return size + ", " + rate + bitrate;
     }
 
     private void RefreshRecentFiles()
@@ -397,45 +452,62 @@ public sealed partial class MainForm : Form
 
         Log($"Simulating outage on '{entry.StreamPath}' for {seconds} s...");
 
-        await RunBusyAsync(() => entry.Camera.SimulateOutageAsync(TimeSpan.FromSeconds(seconds)));
+        bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
+        bool live = false;
 
-        Log($"Outage on '{entry.StreamPath}' ended. Camera restarted.");
+        await RunBusyAsync(async () =>
+        {
+            await entry.Camera.SimulateOutageAsync(TimeSpan.FromSeconds(seconds));
+            live = await entry.Camera.WaitUntilLiveAsync(TimeSpan.FromSeconds(10));
+        });
+
+        Log(live
+            ? $"Outage on '{entry.StreamPath}' ended. The stream is back."
+            : $"Outage on '{entry.StreamPath}' ended, but the stream did not come back. See the FFmpeg lines above.");
+
+        // VLC gives up during the outage and does not reconnect, so reopen it.
+        if (live && hadVlc)
+            OpenVlc(entry);
+
         UpdateButtons();
     }
 
-    private void EditOptions()
+    /// <summary>
+    /// The one place to change stream settings. Saving applies them to every camera:
+    /// running cameras restart with the new settings and their VLC windows reopen.
+    /// </summary>
+    private async Task EditSettingsAsync()
     {
-        using var dialog = new OptionsDialog(_options);
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-            return;
-
-        _options = dialog.Result;
-
-        if (!OptionsStore.Save(_options))
-            Log("WARNING: the options could not be saved to disk, so they will be lost when the app closes.");
-
-        // FFmpeg settings apply to every camera now. Running cameras restart.
-        int applied = 0;
-        foreach (var entry in _entries.ToList())
+        StreamOptions edited;
+        using (var dialog = new OptionsDialog(_options))
         {
-            try
-            {
-                entry.Camera.ApplyOptions(CameraOptions());
-                applied++;
-            }
-            catch (Exception ex)
-            {
-                ErrorReporter.Report(ex, $"Applying options to {entry.StreamPath}");
-                Log($"ERROR: could not apply the options to '{entry.StreamPath}': {ex.Message}");
-            }
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            edited = dialog.Result;
         }
 
-        Log(applied > 0
-            ? $"Stream options saved and applied to {applied} camera(s). Running cameras were restarted."
-            : "Stream options saved. They apply to cameras you add from now on.");
+        _options = edited;
+
+        if (!OptionsStore.Save(_options))
+            Log("WARNING: the settings could not be saved to disk, so they will be lost when the app closes.");
+
+        if (_entries.Count == 0)
+        {
+            Log($"Settings saved: {Describe(_options)}. Cameras you add will use them.");
+        }
+        else
+        {
+            Log($"Settings saved: {Describe(_options)}. Applying to {_entries.Count} camera(s)...");
+            await RunBusyAsync(async () =>
+            {
+                foreach (var entry in _entries.ToList())
+                    await ApplySettingsToCameraAsync(entry);
+            });
+        }
 
         if (_server is not null && _serverOptions is not null && !_serverOptions.ServerSettingsEqual(_options))
-            Log("The MediaMTX settings (transports, timeouts, logins, log level) changed. " +
+            Log("The server settings (transports, timeouts, logins, log level) changed. " +
                 "Stop and start the server for them to take effect.");
 
         UpdateButtons();
@@ -462,6 +534,10 @@ public sealed partial class MainForm : Form
 
     private void DisposeCamera(CameraEntry entry)
     {
+        // The VLC window would only show a dead stream, so close it with the camera.
+        VlcLauncher.Close(entry.Vlc);
+        entry.Vlc = null;
+
         try
         {
             entry.Camera.Dispose();
@@ -507,7 +583,6 @@ public sealed partial class MainForm : Form
         _startCamera.Enabled = !_busy && selected is not null && !selectedOnline;
         _stopCamera.Enabled = !_busy && selected is not null && selectedOnline;
         _removeCamera.Enabled = !_busy && selected is not null;
-        _quality.Enabled = !_busy && selected is not null;
         _openVlc.Enabled = !_busy && selectedOnline;
         _outage.Enabled = !_busy && selected is not null;
 

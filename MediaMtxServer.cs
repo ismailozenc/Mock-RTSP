@@ -49,6 +49,45 @@ public sealed class MediaMtxServer : IDisposable
         return $"rtsp://{login}127.0.0.1:{Port}/{path.TrimStart('/')}";
     }
 
+    /// <summary>
+    /// True when MediaMTX is serving the path, checked the way a viewer would: an RTSP DESCRIBE
+    /// that must answer 200 OK. Never throws.
+    /// </summary>
+    public async Task<bool> IsPathReadyAsync(string path, string? user, string? password, CancellationToken ct = default)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, Port, timeout.Token);
+            var stream = client.GetStream();
+
+            var request = new StringBuilder()
+                .Append("DESCRIBE ").Append(BuildUrl(path)).Append(" RTSP/1.0\r\n")
+                .Append("CSeq: 1\r\n")
+                .Append("Accept: application/sdp\r\n");
+
+            if (!string.IsNullOrEmpty(user))
+            {
+                string token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{password}"));
+                request.Append("Authorization: Basic ").Append(token).Append("\r\n");
+            }
+
+            request.Append("\r\n");
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(request.ToString()), timeout.Token);
+
+            var buffer = new byte[64];
+            int read = await stream.ReadAsync(buffer, timeout.Token);
+            return Encoding.ASCII.GetString(buffer, 0, read).StartsWith("RTSP/1.0 200", StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     /// <param name="mediaMtxPath">Full path to mediamtx.exe.</param>
     /// <param name="log">Optional callback for status messages.</param>
     /// <param name="options">Server settings. Null uses the defaults.</param>
@@ -84,6 +123,7 @@ public sealed class MediaMtxServer : IDisposable
 
         Process? process = null;
         MediaMtxServer? server = null;
+        var output = new Queue<string>();
 
         try
         {
@@ -102,15 +142,36 @@ public sealed class MediaMtxServer : IDisposable
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start MediaMTX.");
 
-            // Drain output so the server never blocks on a full pipe.
-            process.OutputDataReceived += (_, e) => Debug.WriteLine(e.Data);
-            process.ErrorDataReceived += (_, e) => Debug.WriteLine(e.Data);
+            // Drain output so the server never blocks on a full pipe. Keep the last lines,
+            // so a failed start can say why (for example a rejected config value).
+            process.OutputDataReceived += (_, e) => Remember(output, e.Data);
+            process.ErrorDataReceived += (_, e) => Remember(output, e.Data);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
             server = new MediaMtxServer(process, workDir, port);
             await WaitForPortAsync(process, port, readyTimeout ?? TimeSpan.FromSeconds(10), ct);
             return server;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException && process is not null && HasExitedQuietly(process))
+        {
+            // MediaMTX quit by itself. Its last output says why, so pass that on.
+            process.WaitForExit();                  // lets the remaining output arrive
+            string details;
+            lock (output)
+            {
+                details = string.Join(Environment.NewLine, output);
+            }
+
+            server?.Dispose();
+            if (server is null)
+            {
+                KillQuietly(process);
+                DeleteDirQuietly(workDir);
+            }
+
+            throw new InvalidOperationException(
+                details.Length > 0 ? $"MediaMTX could not start:{Environment.NewLine}{details}" : ex.Message, ex);
         }
         catch (Exception ex)
         {
@@ -150,22 +211,52 @@ public sealed class MediaMtxServer : IDisposable
         sb.AppendLine("srt: no");
         sb.AppendLine("api: no");
         sb.AppendLine("metrics: no");
+        // Logins. "any" with an empty password means no login is needed for that action.
+        sb.AppendLine("authInternalUsers:");
+        AppendUser(sb, options.PublisherUser, options.PublisherPassword, "publish");
+        AppendUser(sb, options.ViewerUser, options.ViewerPassword, "read", "playback");
+
         sb.AppendLine("paths:");
         sb.AppendLine("  all_others:");
 
-        if (options.PublisherUser.Length > 0)
-        {
-            sb.AppendLine($"    publishUser: {Quote(options.PublisherUser)}");
-            sb.AppendLine($"    publishPass: {Quote(options.PublisherPassword)}");
-        }
-
-        if (options.ViewerUser.Length > 0)
-        {
-            sb.AppendLine($"    readUser: {Quote(options.ViewerUser)}");
-            sb.AppendLine($"    readPass: {Quote(options.ViewerPassword)}");
-        }
-
         return sb.ToString();
+    }
+
+    private static void AppendUser(StringBuilder sb, string user, string password, params string[] actions)
+    {
+        bool open = user.Length == 0;
+
+        sb.AppendLine($"  - user: {(open ? "any" : Quote(user))}");
+        sb.AppendLine($"    pass: {(open ? "\"\"" : Quote(password))}");
+        sb.AppendLine("    ips: []");
+        sb.AppendLine("    permissions:");
+        foreach (string action in actions)
+            sb.AppendLine($"      - action: {action}");
+    }
+
+    private static void Remember(Queue<string> output, string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+
+        lock (output)
+        {
+            output.Enqueue(line.Trim());
+            while (output.Count > 10)
+                output.Dequeue();
+        }
+    }
+
+    private static bool HasExitedQuietly(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static string TransportList(RtspTransportMode mode) => mode switch

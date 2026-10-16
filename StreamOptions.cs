@@ -82,8 +82,19 @@ public sealed class StreamOptions
         if ((PublisherUser.Length > 0) != (PublisherPassword.Length > 0))
             problems.Add("Publisher login needs both a username and a password.");
 
+        if (!IsValidCredential(ViewerUser) || !IsValidCredential(ViewerPassword)
+            || !IsValidCredential(PublisherUser) || !IsValidCredential(PublisherPassword))
+            problems.Add("Logins can only use letters, digits and ! $ ( ) * + . ; < = > [ ] ^ _ - @ # (MediaMTX rejects anything else).");
+
         return problems;
     }
+
+    private const string CredentialSymbols = "!$()*+.;<=>[]^_-@#";
+
+    /// <summary>Empty, or only the characters MediaMTX accepts in a user name or password.</summary>
+    private static bool IsValidCredential(string? value) =>
+        string.IsNullOrEmpty(value)
+        || value.All(c => (c < 128 && char.IsLetterOrDigit(c)) || CredentialSymbols.Contains(c));
 
     /// <summary>Builds the FFmpeg command-line arguments for publishing one camera.</summary>
     public List<string> FfmpegArguments(string source, string url)

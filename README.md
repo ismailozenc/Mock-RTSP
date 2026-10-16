@@ -23,10 +23,12 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 2. Enter a stream path such as `Streaming/Channels/101` and choose a video file to loop, then click **Add camera**.
 3. The camera starts as soon as it is added. Use **Stop** and **Start** to take it off and back on line. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 4. Select a camera and click **Open in VLC** to watch it. The button is enabled while the camera is running. VLC is found in a `vlc` folder next to `MockRtsp.exe`, or in its normal install folder.
-5. Click **Quality...** to change a camera's bitrate, size, frame rate and other FFmpeg settings. Saving restarts that camera. These settings need re-encoding, so changing one turns **Re-encode** on. Width and height must be even, for example 1280 x 720.
+5. Click **Settings...** to change resolution, frame rate, bitrate and the other video settings. Saving applies them to every camera: running cameras restart with the new settings, and VLC windows opened from the app reopen on the new stream. Width and height must be even, for example 1280 x 720.
 6. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
-**Stream options...** are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Saving applies the FFmpeg settings to every existing camera and restarts running ones. MediaMTX settings (transports, timeouts, logins, log level) need the server to be stopped and started again.
+Changing settings disconnects anyone watching, just as a real camera does when its resolution changes. Your own viewer has to reconnect; VLC windows opened from the app are reopened for you.
+
+Settings are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Server settings (transports, timeouts, logins, log level) apply after you stop and start the server. Logins can only use letters, digits and `! $ ( ) * + . ; < = > [ ] ^ _ - @ #`.
 
 Video files you add as cameras are remembered in the dropdown next to **Video file**, up to 10 files, in `%APPDATA%\MockRtsp\recent-files.txt`.
 
