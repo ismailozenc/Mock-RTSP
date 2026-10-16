@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MockRtsp</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Embed mediamtx.exe only when it has been placed in Binaries\ (optional). -->
+  <ItemGroup Condition="Exists('Binaries\mediamtx.exe')">
+    <EmbeddedResource Include="Binaries\mediamtx.exe"
+                      LogicalName="MockRtsp.Binaries.mediamtx.exe" />
+  </ItemGroup>
+
+</Project>
