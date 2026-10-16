@@ -21,9 +21,9 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 
 1. Click **Start server**.
 2. Enter a stream path such as `Streaming/Channels/101` and choose a video file to loop, then click **Add camera**.
-3. Select the camera and click **Start**. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
+3. The camera starts as soon as it is added. Use **Stop** and **Start** to take it off and back on line. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 4. Select a camera and click **Open in VLC** to watch it. The button is enabled while the camera is running. VLC is found in a `vlc` folder next to `MockRtsp.exe`, or in its normal install folder.
-5. Click **Quality...** to change a camera's bitrate, size, frame rate and other FFmpeg settings. Saving restarts that camera. Size, frame rate, bitrate and keyframe settings only apply when **Re-encode** is on.
+5. Click **Quality...** to change a camera's bitrate, size, frame rate and other FFmpeg settings. Saving restarts that camera. These settings need re-encoding, so changing one turns **Re-encode** on. Width and height must be even, for example 1280 x 720.
 6. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour.
 
 **Stream options...** are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Saving applies the FFmpeg settings to every existing camera and restarts running ones. MediaMTX settings (transports, timeouts, logins, log level) need the server to be stopped and started again.

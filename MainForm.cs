@@ -32,6 +32,9 @@ public sealed partial class MainForm : Form
     public MainForm()
     {
         InitializeComponent();
+
+        // Owner-drawn rows do not scale with DPI by themselves, so size them from the actual font.
+        _cameras.ItemHeight = _cameras.Font.Height + 6;
     }
 
     private CameraEntry? SelectedEntry => _cameras.SelectedItem as CameraEntry;
@@ -98,6 +101,31 @@ public sealed partial class MainForm : Form
         await SafeAsync(SimulateOutageAsync, "Simulate outage");
 
     private void OnCamerasSelectedIndexChanged(object? sender, EventArgs e) => UpdateButtons();
+
+    /// <summary>
+    /// Draws each camera row from its current state. A normal ListBox keeps the text it had
+    /// when the item was added, so the [ON]/[off] label would never change.
+    /// </summary>
+    private void OnCamerasDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        try
+        {
+            e.DrawBackground();
+
+            if (e.Index >= 0 && e.Index < _cameras.Items.Count)
+            {
+                string text = _cameras.Items[e.Index]?.ToString() ?? string.Empty;
+                TextRenderer.DrawText(e.Graphics, text, e.Font ?? _cameras.Font, e.Bounds, e.ForeColor,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+
+            e.DrawFocusRectangle();
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "Drawing camera list");
+        }
+    }
 
     private void OnTimerTick(object? sender, EventArgs e)
     {
@@ -277,7 +305,18 @@ public sealed partial class MainForm : Form
         RefreshRecentFiles();
 
         Log($"Added camera {camera.Url}");
-        UpdateButtons();
+
+        // A camera is live as soon as it is added. If FFmpeg cannot start, the camera stays
+        // in the list (stopped) and the error is shown.
+        try
+        {
+            camera.Start();
+            Log($"Started {camera.Url}");
+        }
+        finally
+        {
+            UpdateButtons();
+        }
     }
 
     private void OpenInVlc()
