@@ -52,6 +52,9 @@ public sealed class StreamOptions
         if (ReEncode && (Width > 0) != (Height > 0))
             problems.Add("Width and height must both be set, or both left at 0.");
 
+        if (ReEncode && (Width % 2 != 0 || Height % 2 != 0))
+            problems.Add("Width and height must be even numbers (H.264 requires it).");
+
         if (PublishTransport is not ("tcp" or "udp"))
             problems.Add("Publish transport must be tcp or udp.");
 

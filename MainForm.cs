@@ -255,7 +255,11 @@ public sealed partial class MainForm : Form
 
         var camera = new MockCamera(_server, path, source, RequireFfmpeg(), _options.Clone());
         camera.PublisherExited += (_, code) =>
-            Log($"FFmpeg for '{path}' exited with code {code}. Stream is down.");
+        {
+            string output = camera.LastFfmpegOutput;
+            Log($"FFmpeg for '{path}' exited with code {code}. Stream is down."
+                + (output.Length > 0 ? Environment.NewLine + output : string.Empty));
+        };
 
         var entry = new CameraEntry(path, source, camera);
         _entries.Add(entry);
