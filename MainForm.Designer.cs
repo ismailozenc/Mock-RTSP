@@ -21,6 +21,14 @@ public sealed partial class MainForm
     private Button _browseVideo = null!;
     private Button _addCamera = null!;
     private ListBox _cameras = null!;
+    private FlowLayoutPanel _playerRow = null!;
+    private Button _back10 = null!;
+    private Button _playPause = null!;
+    private Button _forward10 = null!;
+    private TrackBar _seekBar = null!;
+    private Label _timeLabel = null!;
+    private Label _lblSpeed = null!;
+    private ComboBox _speed = null!;
     private FlowLayoutPanel _actionsRow = null!;
     private Button _startCamera = null!;
     private Button _stopCamera = null!;
@@ -63,6 +71,14 @@ public sealed partial class MainForm
         _browseVideo = new Button();
         _addCamera = new Button();
         _cameras = new ListBox();
+        _playerRow = new FlowLayoutPanel();
+        _back10 = new Button();
+        _playPause = new Button();
+        _forward10 = new Button();
+        _seekBar = new TrackBar();
+        _timeLabel = new Label();
+        _lblSpeed = new Label();
+        _speed = new ComboBox();
         _actionsRow = new FlowLayoutPanel();
         _startCamera = new Button();
         _stopCamera = new Button();
@@ -80,6 +96,8 @@ public sealed partial class MainForm
         _root.SuspendLayout();
         _serverRow.SuspendLayout();
         _cameraRow.SuspendLayout();
+        _playerRow.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)_seekBar).BeginInit();
         _actionsRow.SuspendLayout();
 
         // _lblPort
@@ -138,6 +156,36 @@ public sealed partial class MainForm
         _cameras.IntegralHeight = false;
         _cameras.ItemHeight = 22;
 
+        // Player row: controls the selected camera. Viewers stay connected through all of these.
+        _back10.Size = new Size(70, 28);
+        _back10.Text = "« 10 s";
+        _playPause.Size = new Size(80, 28);
+        _playPause.Text = "Pause";
+        _forward10.Size = new Size(70, 28);
+        _forward10.Text = "10 s »";
+        _seekBar.AutoSize = false;
+        _seekBar.Margin = new Padding(6, 2, 6, 0);
+        _seekBar.Maximum = 100;
+        _seekBar.Size = new Size(380, 30);
+        _seekBar.TickStyle = TickStyle.None;
+        _timeLabel.AutoSize = true;
+        _timeLabel.Font = new Font("Consolas", 9F);
+        _timeLabel.Margin = new Padding(0, 7, 12, 0);
+        _timeLabel.Text = "--:-- / --:--";
+        _lblSpeed.AutoSize = true;
+        _lblSpeed.Margin = new Padding(0, 7, 2, 0);
+        _lblSpeed.Text = "Speed:";
+        _speed.DropDownStyle = ComboBoxStyle.DropDownList;
+        _speed.Items.AddRange(new object[] { "0.25x", "0.5x", "1x", "2x", "4x" });
+        _speed.Margin = new Padding(0, 4, 0, 0);
+        _speed.Width = 70;
+
+        _playerRow.AutoSize = true;
+        _playerRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _playerRow.Margin = new Padding(0, 4, 0, 2);
+        _playerRow.WrapContents = true;
+        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _seekBar, _timeLabel, _lblSpeed, _speed });
+
         // Camera actions row
         _startCamera.AutoSize = true;
         _startCamera.Text = "Start";
@@ -179,17 +227,19 @@ public sealed partial class MainForm
         _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _root.Dock = DockStyle.Fill;
         _root.Padding = new Padding(8);
-        _root.RowCount = 5;
+        _root.RowCount = 6;
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));
         _root.Controls.Add(_serverRow, 0, 0);
         _root.Controls.Add(_cameraRow, 0, 1);
         _root.Controls.Add(_cameras, 0, 2);
-        _root.Controls.Add(_actionsRow, 0, 3);
-        _root.Controls.Add(_log, 0, 4);
+        _root.Controls.Add(_playerRow, 0, 3);
+        _root.Controls.Add(_actionsRow, 0, 4);
+        _root.Controls.Add(_log, 0, 5);
 
         // Events
         _startServer.Click += new EventHandler(OnStartServerClick);
@@ -204,9 +254,17 @@ public sealed partial class MainForm
         _outage.Click += new EventHandler(OnOutageClick);
         _cameras.SelectedIndexChanged += new EventHandler(OnCamerasSelectedIndexChanged);
         _cameras.DrawItem += new DrawItemEventHandler(OnCamerasDrawItem);
+        _back10.Click += new EventHandler(OnBack10Click);
+        _playPause.Click += new EventHandler(OnPlayPauseClick);
+        _forward10.Click += new EventHandler(OnForward10Click);
+        _seekBar.MouseDown += new MouseEventHandler(OnSeekBarMouseDown);
+        _seekBar.MouseUp += new MouseEventHandler(OnSeekBarMouseUp);
+        _seekBar.KeyUp += new KeyEventHandler(OnSeekBarKeyUp);
+        _seekBar.Scroll += new EventHandler(OnSeekBarScroll);
+        _speed.SelectedIndexChanged += new EventHandler(OnSpeedChanged);
 
-        // Timer (refreshes camera status once a second)
-        _timer.Interval = 1000;
+        // Timer (refreshes camera status and the player position four times a second)
+        _timer.Interval = 250;
         _timer.Tick += new EventHandler(OnTimerTick);
 
         // Form
@@ -224,6 +282,8 @@ public sealed partial class MainForm
 
         _serverRow.ResumeLayout(false);
         _cameraRow.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)_seekBar).EndInit();
+        _playerRow.ResumeLayout(false);
         _actionsRow.ResumeLayout(false);
         _root.ResumeLayout(false);
         ResumeLayout(false);

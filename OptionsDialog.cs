@@ -22,19 +22,8 @@ public sealed partial class OptionsDialog : Form
         _working = current.Clone();
         Result = _working;
 
-        _reEncode.CheckedChanged += new EventHandler(OnReEncodeChanged);
-
-        // Changing any encoding setting turns re-encoding on, so the change is never silently ignored.
-        _bitrate.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _keyframe.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _width.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _height.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _frameRate.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _noBFrames.CheckedChanged += new EventHandler(OnEncodeSettingChanged);
-
         FillComboBoxes();
-        LoadFromOptions(_working);
-        UpdateEnabled();
+        LoadValues(_working);
     }
 
     private void FillComboBoxes()
@@ -45,28 +34,9 @@ public sealed partial class OptionsDialog : Form
         _transports.Items.AddRange(new object[] { "TCP and UDP", "TCP only", "UDP only" });
     }
 
-    private bool _loading;
-
-    /// <summary>Copies settings into the controls without treating the copy as a user change.</summary>
-    private void LoadFromOptions(StreamOptions o)
-    {
-        _loading = true;
-        try
-        {
-            LoadValues(o);
-        }
-        finally
-        {
-            _loading = false;
-        }
-    }
-
     private void LoadValues(StreamOptions o)
     {
         _loop.Checked = o.Loop;
-        _realTime.Checked = o.RealTime;
-        _dropAudio.Checked = o.DropAudio;
-        _reEncode.Checked = o.ReEncode;
         SetValue(_bitrate, o.BitrateKbps);
         SetValue(_keyframe, o.KeyframeInterval);
         SetValue(_width, o.Width);
@@ -92,8 +62,6 @@ public sealed partial class OptionsDialog : Form
 
     private void ApplyToOptions()
     {
-        // Commit typed numbers first. Committing a changed encoding value ticks Re-encode,
-        // so this must happen before Re-encode is read below.
         CommitTyped(_bitrate);
         CommitTyped(_keyframe);
         CommitTyped(_width);
@@ -103,9 +71,6 @@ public sealed partial class OptionsDialog : Form
         CommitTyped(_writeTimeout);
 
         _working.Loop = _loop.Checked;
-        _working.RealTime = _realTime.Checked;
-        _working.DropAudio = _dropAudio.Checked;
-        _working.ReEncode = _reEncode.Checked;
         _working.BitrateKbps = (int)_bitrate.Value;
         _working.KeyframeInterval = (int)_keyframe.Value;
         _working.Width = (int)_width.Value;
@@ -138,27 +103,9 @@ public sealed partial class OptionsDialog : Form
         }
     }
 
-    private void UpdateEnabled()
-    {
-        // The encoding settings stay editable. Changing one turns re-encoding on (see OnEncodeSettingChanged).
-    }
+    // ---- Event handlers (wired in OptionsDialog.Designer.cs) ----
 
-    // ---- Event handlers (wired in OptionsDialog.Designer.cs and the constructor) ----
-
-    private void OnReEncodeChanged(object? sender, EventArgs e) => UpdateEnabled();
-
-    /// <summary>A user-made change to an encoding setting implies re-encoding, so turn it on.</summary>
-    private void OnEncodeSettingChanged(object? sender, EventArgs e)
-    {
-        if (!_loading && !_reEncode.Checked)
-            _reEncode.Checked = true;
-    }
-
-    private void OnResetClick(object? sender, EventArgs e)
-    {
-        LoadFromOptions(new StreamOptions());
-        UpdateEnabled();
-    }
+    private void OnResetClick(object? sender, EventArgs e) => LoadValues(new StreamOptions());
 
     private void OnOkClick(object? sender, EventArgs e)
     {
@@ -170,7 +117,7 @@ public sealed partial class OptionsDialog : Form
             if (problems.Count > 0)
             {
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems),
-                    "Check the options", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "Check the settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;                                 // stay open so the user can fix it
             }
 

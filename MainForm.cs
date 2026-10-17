@@ -20,8 +20,13 @@ public sealed partial class MainForm : Form
         /// <summary>The VLC window opened for this camera, if any. Reopened after a settings change.</summary>
         public Process? Vlc { get; set; }
 
-        public override string ToString() =>
-            $"{(Camera.IsOnline ? "[ON]  " : "[off] ")}{StreamPath}    ({Path.GetFileName(SourceFile)})";
+        public override string ToString()
+        {
+            string state = !Camera.IsOnline ? "[off] " : Camera.IsPaused ? "[ON]  paused  " : "[ON]  ";
+            string speed = Camera.Speed == 1.0 ? string.Empty : $"  {Camera.Speed:0.##}x";
+            return $"{state}{StreamPath}    ({Path.GetFileName(SourceFile)})    "
+                   + $"{FormatTime(Camera.Position)} / {FormatTime(Camera.Duration)}{speed}";
+        }
     }
 
     // Found in the "mediamtx" and "ffmpeg" folders next to the program when the form loads. Null if missing.
@@ -33,6 +38,11 @@ public sealed partial class MainForm : Form
     private readonly List<CameraEntry> _entries = new();
     private MediaMtxServer? _server;
     private bool _busy;
+
+    // Player row state.
+    private static readonly double[] Speeds = { 0.25, 0.5, 1.0, 2.0, 4.0 };     // matches the _speed items
+    private bool _draggingSeekBar;      // while the user drags, the timer must not move the slider
+    private bool _updatingPlayer;       // set while code (not the user) changes the player controls
 
     public MainForm()
     {
@@ -380,7 +390,7 @@ public sealed partial class MainForm : Form
                 return;
             }
 
-            Log($"'{entry.StreamPath}': now streaming {Describe(entry.Camera.Options)}.");
+            Log($"'{entry.StreamPath}': now streaming {Describe(entry.Camera.Format, entry.Camera.Options)}.");
 
             if (hadVlc)
             {
@@ -395,15 +405,148 @@ public sealed partial class MainForm : Form
         }
     }
 
+    /// <summary>What a camera actually sends, e.g. "1280x720, 15 fps, 2000 kbps".</summary>
+    private static string Describe(VideoFormat format, StreamOptions o)
+    {
+        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
+        return $"{format.Width}x{format.Height}, {format.FrameRate} fps{bitrate}";
+    }
+
+    /// <summary>The settings themselves, e.g. "original size, 15 fps".</summary>
     private static string Describe(StreamOptions o)
     {
-        if (!o.ReEncode)
-            return "the original video (not re-encoded)";
-
         string size = o.Width > 0 ? o.Width + "x" + o.Height : "original size";
         string rate = o.FrameRate > 0 ? o.FrameRate + " fps" : "original frame rate";
         string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
         return size + ", " + rate + bitrate;
+    }
+
+    private static string FormatTime(TimeSpan time) =>
+        time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
+
+    // ---- Player: pause, rewind, forward, seek and speed for the selected camera ----
+
+    private void OnPlayPauseClick(object? sender, EventArgs e) => Safe(TogglePause, "Play/Pause");
+
+    private void OnBack10Click(object? sender, EventArgs e) => Safe(() => SeekSelectedBy(-10), "Rewind");
+
+    private void OnForward10Click(object? sender, EventArgs e) => Safe(() => SeekSelectedBy(10), "Forward");
+
+    private void OnSeekBarMouseDown(object? sender, MouseEventArgs e) => _draggingSeekBar = true;
+
+    private void OnSeekBarMouseUp(object? sender, MouseEventArgs e)
+    {
+        _draggingSeekBar = false;
+        Safe(SeekSelectedToBar, "Seek");
+    }
+
+    private void OnSeekBarKeyUp(object? sender, KeyEventArgs e) => Safe(SeekSelectedToBar, "Seek");
+
+    /// <summary>While dragging, show where the camera will jump to.</summary>
+    private void OnSeekBarScroll(object? sender, EventArgs e)
+    {
+        var entry = SelectedEntry;
+        if (entry is not null && !_updatingPlayer)
+            _timeLabel.Text = $"{FormatTime(TimeSpan.FromSeconds(_seekBar.Value))} / {FormatTime(entry.Camera.Duration)}";
+    }
+
+    private void OnSpeedChanged(object? sender, EventArgs e)
+    {
+        if (_updatingPlayer)
+            return;
+
+        Safe(() =>
+        {
+            var entry = SelectedEntry;
+            if (entry is null || _speed.SelectedIndex < 0)
+                return;
+
+            entry.Camera.Speed = Speeds[_speed.SelectedIndex];
+            Log($"'{entry.StreamPath}': speed {entry.Camera.Speed:0.##}x.");
+        }, "Speed");
+    }
+
+    private void TogglePause()
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+        var camera = entry.Camera;
+
+        if (camera.IsPaused)
+        {
+            camera.Resume();
+            Log($"'{entry.StreamPath}': playing from {FormatTime(camera.Position)}.");
+        }
+        else
+        {
+            camera.Pause();
+            Log($"'{entry.StreamPath}': paused at {FormatTime(camera.Position)}.");
+        }
+
+        UpdatePlayer();
+    }
+
+    private void SeekSelectedBy(int seconds)
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+
+        entry.Camera.SeekBy(TimeSpan.FromSeconds(seconds));
+        Log($"'{entry.StreamPath}': {(seconds < 0 ? "back" : "forward")} {Math.Abs(seconds)} s to {FormatTime(entry.Camera.Position)}.");
+        UpdatePlayer();
+    }
+
+    private void SeekSelectedToBar()
+    {
+        var entry = SelectedEntry;
+        if (entry is null)
+            return;
+
+        entry.Camera.SeekTo(TimeSpan.FromSeconds(_seekBar.Value));
+        Log($"'{entry.StreamPath}': jumped to {FormatTime(entry.Camera.Position)}.");
+        UpdatePlayer();
+    }
+
+    /// <summary>Shows the selected camera's position, pause state and speed in the player row.</summary>
+    private void UpdatePlayer()
+    {
+        var entry = SelectedEntry;
+        bool enabled = !_busy && entry is not null;
+
+        _back10.Enabled = enabled;
+        _playPause.Enabled = enabled;
+        _forward10.Enabled = enabled;
+        _seekBar.Enabled = enabled;
+        _speed.Enabled = enabled;
+
+        if (entry is null)
+        {
+            _timeLabel.Text = "--:-- / --:--";
+            return;
+        }
+
+        var camera = entry.Camera;
+        _updatingPlayer = true;
+        try
+        {
+            _playPause.Text = camera.IsPaused ? "Play" : "Pause";
+
+            int duration = Math.Max(1, (int)Math.Ceiling(camera.Duration.TotalSeconds));
+            if (_seekBar.Maximum != duration)
+                _seekBar.Maximum = duration;
+
+            if (!_draggingSeekBar)
+            {
+                _seekBar.Value = Math.Min(_seekBar.Maximum, Math.Max(_seekBar.Minimum, (int)camera.Position.TotalSeconds));
+                _timeLabel.Text = $"{FormatTime(camera.Position)} / {FormatTime(camera.Duration)}";
+            }
+
+            int speedIndex = Array.IndexOf(Speeds, camera.Speed);
+            if (_speed.SelectedIndex != speedIndex)
+                _speed.SelectedIndex = speedIndex;
+        }
+        finally
+        {
+            _updatingPlayer = false;
+        }
     }
 
     private void RefreshRecentFiles()
@@ -589,6 +732,8 @@ public sealed partial class MainForm : Form
         _statusText.Text = serverUp
             ? $"MediaMTX running on port {_server!.Port}  |  cameras: {_entries.Count}"
             : _mediaMtxExe is null ? "MediaMTX not found" : "Server stopped";
+
+        UpdatePlayer();
     }
 
     private void Log(string message)

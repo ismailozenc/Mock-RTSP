@@ -23,11 +23,7 @@ public sealed partial class OptionsDialog
     private Label _ffIntro = null!;
     private Label _hdrTiming = null!;
     private CheckBox _loop = null!;
-    private CheckBox _realTime = null!;
-    private CheckBox _dropAudio = null!;
     private Label _hdrEncode = null!;
-    private CheckBox _reEncode = null!;
-    private Label _reEncodeHint = null!;
     private Label _lblBitrate = null!;
     private NumericUpDown _bitrate = null!;
     private Label _lblKeyframe = null!;
@@ -97,11 +93,7 @@ public sealed partial class OptionsDialog
         _ffIntro = new Label();
         _hdrTiming = new Label();
         _loop = new CheckBox();
-        _realTime = new CheckBox();
-        _dropAudio = new CheckBox();
         _hdrEncode = new Label();
-        _reEncode = new CheckBox();
-        _reEncodeHint = new Label();
         _lblBitrate = new Label();
         _bitrate = new NumericUpDown();
         _lblKeyframe = new Label();
@@ -179,7 +171,7 @@ public sealed partial class OptionsDialog
         // ================= FFmpeg tab =================
         _tabFfmpeg.AutoScroll = true;
         _tabFfmpeg.Padding = new Padding(10);
-        _tabFfmpeg.Text = "Video (FFmpeg)";
+        _tabFfmpeg.Text = "Video";
         _tabFfmpeg.UseVisualStyleBackColor = true;
         _tabFfmpeg.Controls.Add(_ffGrid);
 
@@ -189,11 +181,7 @@ public sealed partial class OptionsDialog
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _ffGrid.Dock = DockStyle.Top;
-        _ffGrid.RowCount = 16;
-        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowCount = 12;
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -209,33 +197,25 @@ public sealed partial class OptionsDialog
         _ffGrid.Controls.Add(_ffIntro, 0, 0);
         _ffGrid.Controls.Add(_hdrTiming, 0, 1);
         _ffGrid.Controls.Add(_loop, 0, 2);
-        _ffGrid.Controls.Add(_realTime, 0, 3);
-        _ffGrid.Controls.Add(_dropAudio, 0, 4);
-        _ffGrid.Controls.Add(_hdrEncode, 0, 5);
-        _ffGrid.Controls.Add(_reEncode, 0, 6);
-        _ffGrid.Controls.Add(_reEncodeHint, 0, 7);
-        _ffGrid.Controls.Add(_lblBitrate, 0, 8);
-        _ffGrid.Controls.Add(_bitrate, 1, 8);
-        _ffGrid.Controls.Add(_lblKeyframe, 0, 9);
-        _ffGrid.Controls.Add(_keyframe, 1, 9);
-        _ffGrid.Controls.Add(_lblSize, 0, 10);
-        _ffGrid.Controls.Add(_sizeRow, 1, 10);
-        _ffGrid.Controls.Add(_lblFrameRate, 0, 11);
-        _ffGrid.Controls.Add(_frameRate, 1, 11);
-        _ffGrid.Controls.Add(_noBFrames, 0, 12);
-        _ffGrid.Controls.Add(_hdrPublish, 0, 13);
-        _ffGrid.Controls.Add(_lblPublishTransport, 0, 14);
-        _ffGrid.Controls.Add(_publishTransport, 1, 14);
-        _ffGrid.Controls.Add(_lblFfmpegLog, 0, 15);
-        _ffGrid.Controls.Add(_ffmpegLog, 1, 15);
+        _ffGrid.Controls.Add(_hdrEncode, 0, 3);
+        _ffGrid.Controls.Add(_lblSize, 0, 4);
+        _ffGrid.Controls.Add(_sizeRow, 1, 4);
+        _ffGrid.Controls.Add(_lblFrameRate, 0, 5);
+        _ffGrid.Controls.Add(_frameRate, 1, 5);
+        _ffGrid.Controls.Add(_lblBitrate, 0, 6);
+        _ffGrid.Controls.Add(_bitrate, 1, 6);
+        _ffGrid.Controls.Add(_lblKeyframe, 0, 7);
+        _ffGrid.Controls.Add(_keyframe, 1, 7);
+        _ffGrid.Controls.Add(_noBFrames, 0, 8);
+        _ffGrid.Controls.Add(_hdrPublish, 0, 9);
+        _ffGrid.Controls.Add(_lblPublishTransport, 0, 10);
+        _ffGrid.Controls.Add(_publishTransport, 1, 10);
+        _ffGrid.Controls.Add(_lblFfmpegLog, 0, 11);
+        _ffGrid.Controls.Add(_ffmpegLog, 1, 11);
         _ffGrid.SetColumnSpan(_ffIntro, 2);
         _ffGrid.SetColumnSpan(_hdrTiming, 2);
         _ffGrid.SetColumnSpan(_loop, 2);
-        _ffGrid.SetColumnSpan(_realTime, 2);
-        _ffGrid.SetColumnSpan(_dropAudio, 2);
         _ffGrid.SetColumnSpan(_hdrEncode, 2);
-        _ffGrid.SetColumnSpan(_reEncode, 2);
-        _ffGrid.SetColumnSpan(_reEncodeHint, 2);
         _ffGrid.SetColumnSpan(_noBFrames, 2);
         _ffGrid.SetColumnSpan(_hdrPublish, 2);
 
@@ -243,42 +223,26 @@ public sealed partial class OptionsDialog
         _ffIntro.ForeColor = SystemColors.GrayText;
         _ffIntro.Margin = new Padding(0, 0, 0, 4);
         _ffIntro.MaximumSize = new Size(590, 0);
-        _ffIntro.Text = "Applies to every camera. Running cameras restart with the new settings, and VLC windows opened from this app reopen.";
+        _ffIntro.Text = "Applies to every camera. Running cameras restart with the new settings (position, pause and speed are kept), and VLC windows opened from this app reopen. Pause, rewind and forward are on the main window and do not disconnect viewers.";
 
         _hdrTiming.AutoSize = true;
         _hdrTiming.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _hdrTiming.Margin = new Padding(0, 10, 0, 2);
-        _hdrTiming.Text = "Looping and timing";
+        _hdrTiming.Text = "Playback";
 
         _loop.AutoSize = true;
         _loop.Checked = true;
         _loop.Margin = new Padding(12, 2, 0, 2);
-        _loop.Text = "Loop the video when it ends";
+        _loop.Text = "Loop the video when it ends (otherwise hold the last frame)";
 
-        _realTime.AutoSize = true;
-        _realTime.Checked = true;
-        _realTime.Margin = new Padding(12, 2, 0, 2);
-        _realTime.Text = "Send at real-time speed (like a camera)";
 
-        _dropAudio.AutoSize = true;
-        _dropAudio.Checked = true;
-        _dropAudio.Margin = new Padding(12, 2, 0, 2);
-        _dropAudio.Text = "Drop audio";
 
         _hdrEncode.AutoSize = true;
         _hdrEncode.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _hdrEncode.Margin = new Padding(0, 12, 0, 2);
         _hdrEncode.Text = "Resolution and quality";
 
-        _reEncode.AutoSize = true;
-        _reEncode.Margin = new Padding(12, 2, 0, 0);
-        _reEncode.Text = "Re-encode to H.264 (needed to change resolution, frame rate or bitrate)";
 
-        _reEncodeHint.AutoSize = true;
-        _reEncodeHint.ForeColor = SystemColors.GrayText;
-        _reEncodeHint.Margin = new Padding(30, 0, 0, 6);
-        _reEncodeHint.MaximumSize = new Size(560, 0);
-        _reEncodeHint.Text = "Off sends the video unchanged. Changing any value below turns it on.";
 
         _lblBitrate.AutoSize = true;
         _lblBitrate.Margin = new Padding(12, 6, 10, 0);
@@ -359,7 +323,7 @@ public sealed partial class OptionsDialog
         // ================= MediaMTX tab =================
         _tabMtx.AutoScroll = true;
         _tabMtx.Padding = new Padding(10);
-        _tabMtx.Text = "Server (MediaMTX)";
+        _tabMtx.Text = "Server";
         _tabMtx.UseVisualStyleBackColor = true;
         _tabMtx.Controls.Add(_mtxGrid);
 
@@ -510,8 +474,6 @@ public sealed partial class OptionsDialog
 
         // ================= Tooltips =================
         _tips.SetToolTip(_loop, "Replay the video from the start when it reaches the end. Off stops the camera after one pass.");
-        _tips.SetToolTip(_realTime, "Sends frames at their normal rate. Turn off to send as fast as possible.");
-        _tips.SetToolTip(_reEncode, "Needed for the resolution, frame rate, bitrate and keyframe settings.");
         _tips.SetToolTip(_keyframe, "A new viewer shows nothing until the next keyframe. 0 sends one every second, so playback starts within about a second.");
         _tips.SetToolTip(_transports, "Which transports MediaMTX accepts from viewers. TCP is the most reliable.");
         _tips.SetToolTip(_viewerUser, "Set both a username and a password to require a login for viewers.");
@@ -522,7 +484,7 @@ public sealed partial class OptionsDialog
         CancelButton = _cancel;
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(640, 540);
+        ClientSize = new Size(640, 480);
         Font = new Font("Segoe UI", 9F);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
