@@ -41,7 +41,9 @@ public sealed partial class MainForm : Form
 
     // Player row state.
     private static readonly double[] Speeds = { 0.25, 0.5, 1.0, 2.0, 4.0 };     // matches the _speed items
-    private bool _draggingSeekBar;      // while the user drags, the timer must not move the slider
+
+    // Thumbnails per video file, shared by cameras that play the same file. Made in the background.
+    private readonly Dictionary<string, ThumbnailStrip> _thumbnails = new(StringComparer.OrdinalIgnoreCase);
     private bool _updatingPlayer;       // set while code (not the user) changes the player controls
 
     public MainForm()
@@ -84,7 +86,13 @@ public sealed partial class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!DesignMode)
+        {
             Safe(StopServer, "Shutdown");
+
+            foreach (var strip in _thumbnails.Values)
+                strip.Dispose();
+            _thumbnails.Clear();
+        }
 
         base.OnFormClosing(e);
     }
@@ -316,6 +324,10 @@ public sealed partial class MainForm : Form
         _cameras.Items.Add(entry);
         _cameras.SelectedItem = entry;
 
+        // Thumbnails for the timeline, made in the background. Shared by cameras playing the same file.
+        if (!_thumbnails.ContainsKey(source))
+            _thumbnails[source] = ThumbnailStrip.Start(RequireFfmpeg(), source, camera.Source);
+
         RecentFiles.Add(source);
         RefreshRecentFiles();
 
@@ -432,23 +444,22 @@ public sealed partial class MainForm : Form
 
     private void OnForward10Click(object? sender, EventArgs e) => Safe(() => SeekSelectedBy(10), "Forward");
 
-    private void OnSeekBarMouseDown(object? sender, MouseEventArgs e) => _draggingSeekBar = true;
-
-    private void OnSeekBarMouseUp(object? sender, MouseEventArgs e)
-    {
-        _draggingSeekBar = false;
-        Safe(SeekSelectedToBar, "Seek");
-    }
-
-    private void OnSeekBarKeyUp(object? sender, KeyEventArgs e) => Safe(SeekSelectedToBar, "Seek");
-
-    /// <summary>While dragging, show where the camera will jump to.</summary>
-    private void OnSeekBarScroll(object? sender, EventArgs e)
+    private void OnTimelineSeek(object? sender, double seconds) => Safe(() =>
     {
         var entry = SelectedEntry;
-        if (entry is not null && !_updatingPlayer)
-            _timeLabel.Text = $"{FormatTime(TimeSpan.FromSeconds(_seekBar.Value))} / {FormatTime(entry.Camera.Duration)}";
-    }
+        if (entry is null)
+            return;
+
+        entry.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
+        Log($"'{entry.StreamPath}': jumped to {FormatTime(entry.Camera.Position)}.");
+        UpdatePlayer();
+    }, "Seek");
+
+    private void OnZoomInClick(object? sender, EventArgs e) => _timeline.ZoomIn();
+
+    private void OnZoomOutClick(object? sender, EventArgs e) => _timeline.ZoomOut();
+
+    private void OnZoomFitClick(object? sender, EventArgs e) => _timeline.ZoomToFit();
 
     private void OnSpeedChanged(object? sender, EventArgs e)
     {
@@ -494,17 +505,6 @@ public sealed partial class MainForm : Form
         UpdatePlayer();
     }
 
-    private void SeekSelectedToBar()
-    {
-        var entry = SelectedEntry;
-        if (entry is null)
-            return;
-
-        entry.Camera.SeekTo(TimeSpan.FromSeconds(_seekBar.Value));
-        Log($"'{entry.StreamPath}': jumped to {FormatTime(entry.Camera.Position)}.");
-        UpdatePlayer();
-    }
-
     /// <summary>Shows the selected camera's position, pause state and speed in the player row.</summary>
     private void UpdatePlayer()
     {
@@ -514,12 +514,16 @@ public sealed partial class MainForm : Form
         _back10.Enabled = enabled;
         _playPause.Enabled = enabled;
         _forward10.Enabled = enabled;
-        _seekBar.Enabled = enabled;
         _speed.Enabled = enabled;
+        _zoomOut.Enabled = entry is not null;
+        _zoomIn.Enabled = entry is not null;
+        _zoomFit.Enabled = entry is not null;
+        _timeline.Enabled = enabled;
 
         if (entry is null)
         {
             _timeLabel.Text = "--:-- / --:--";
+            _timeline.SetSource(null, 0);
             return;
         }
 
@@ -529,15 +533,12 @@ public sealed partial class MainForm : Form
         {
             _playPause.Text = camera.IsPaused ? "Play" : "Pause";
 
-            int duration = Math.Max(1, (int)Math.Ceiling(camera.Duration.TotalSeconds));
-            if (_seekBar.Maximum != duration)
-                _seekBar.Maximum = duration;
+            _timeLabel.Text = $"{FormatTime(camera.Position)} / {FormatTime(camera.Duration)}";
 
-            if (!_draggingSeekBar)
-            {
-                _seekBar.Value = Math.Min(_seekBar.Maximum, Math.Max(_seekBar.Minimum, (int)camera.Position.TotalSeconds));
-                _timeLabel.Text = $"{FormatTime(camera.Position)} / {FormatTime(camera.Duration)}";
-            }
+            _thumbnails.TryGetValue(entry.SourceFile, out var strip);
+            _timeline.SetSource(strip, camera.Duration.TotalSeconds);
+            _timeline.Position = camera.Position.TotalSeconds;
+            _timeline.Invalidate();             // new thumbnails may have arrived
 
             int speedIndex = Array.IndexOf(Speeds, camera.Speed);
             if (_speed.SelectedIndex != speedIndex)
@@ -583,6 +584,14 @@ public sealed partial class MainForm : Form
         DisposeCamera(entry);
         _entries.Remove(entry);
         _cameras.Items.Remove(entry);
+
+        // Drop the thumbnails unless another camera plays the same file.
+        if (!_entries.Any(other => string.Equals(other.SourceFile, entry.SourceFile, StringComparison.OrdinalIgnoreCase))
+            && _thumbnails.TryGetValue(entry.SourceFile, out var strip))
+        {
+            _thumbnails.Remove(entry.SourceFile);
+            strip.Dispose();
+        }
 
         Log($"Removed {entry.StreamPath}");
         UpdateButtons();

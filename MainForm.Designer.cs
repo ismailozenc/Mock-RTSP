@@ -25,10 +25,14 @@ public sealed partial class MainForm
     private Button _back10 = null!;
     private Button _playPause = null!;
     private Button _forward10 = null!;
-    private TrackBar _seekBar = null!;
     private Label _timeLabel = null!;
     private Label _lblSpeed = null!;
     private ComboBox _speed = null!;
+    private Label _lblZoom = null!;
+    private Button _zoomOut = null!;
+    private Button _zoomIn = null!;
+    private Button _zoomFit = null!;
+    private Timeline _timeline = null!;
     private FlowLayoutPanel _actionsRow = null!;
     private Button _startCamera = null!;
     private Button _stopCamera = null!;
@@ -75,10 +79,14 @@ public sealed partial class MainForm
         _back10 = new Button();
         _playPause = new Button();
         _forward10 = new Button();
-        _seekBar = new TrackBar();
         _timeLabel = new Label();
         _lblSpeed = new Label();
         _speed = new ComboBox();
+        _lblZoom = new Label();
+        _zoomOut = new Button();
+        _zoomIn = new Button();
+        _zoomFit = new Button();
+        _timeline = new Timeline();
         _actionsRow = new FlowLayoutPanel();
         _startCamera = new Button();
         _stopCamera = new Button();
@@ -97,7 +105,6 @@ public sealed partial class MainForm
         _serverRow.SuspendLayout();
         _cameraRow.SuspendLayout();
         _playerRow.SuspendLayout();
-        ((System.ComponentModel.ISupportInitialize)_seekBar).BeginInit();
         _actionsRow.SuspendLayout();
 
         // _lblPort
@@ -163,14 +170,9 @@ public sealed partial class MainForm
         _playPause.Text = "Pause";
         _forward10.Size = new Size(70, 28);
         _forward10.Text = "10 s »";
-        _seekBar.AutoSize = false;
-        _seekBar.Margin = new Padding(6, 2, 6, 0);
-        _seekBar.Maximum = 100;
-        _seekBar.Size = new Size(380, 30);
-        _seekBar.TickStyle = TickStyle.None;
         _timeLabel.AutoSize = true;
         _timeLabel.Font = new Font("Consolas", 9F);
-        _timeLabel.Margin = new Padding(0, 7, 12, 0);
+        _timeLabel.Margin = new Padding(12, 7, 12, 0);
         _timeLabel.Text = "--:-- / --:--";
         _lblSpeed.AutoSize = true;
         _lblSpeed.Margin = new Padding(0, 7, 2, 0);
@@ -179,12 +181,26 @@ public sealed partial class MainForm
         _speed.Items.AddRange(new object[] { "0.25x", "0.5x", "1x", "2x", "4x" });
         _speed.Margin = new Padding(0, 4, 0, 0);
         _speed.Width = 70;
+        _lblZoom.AutoSize = true;
+        _lblZoom.Margin = new Padding(18, 7, 2, 0);
+        _lblZoom.Text = "Timeline:";
+        _zoomOut.Size = new Size(32, 28);
+        _zoomOut.Text = "-";
+        _zoomIn.Size = new Size(32, 28);
+        _zoomIn.Text = "+";
+        _zoomFit.Size = new Size(70, 28);
+        _zoomFit.Text = "Whole";
+
+        // Timeline: thumbnails of the selected camera's video, with a playhead.
+        // Click or drag to jump, wheel to scroll, Ctrl+wheel to zoom.
+        _timeline.Dock = DockStyle.Fill;
+        _timeline.Margin = new Padding(0, 2, 0, 4);
 
         _playerRow.AutoSize = true;
         _playerRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _playerRow.Margin = new Padding(0, 4, 0, 2);
         _playerRow.WrapContents = true;
-        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _seekBar, _timeLabel, _lblSpeed, _speed });
+        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _timeLabel, _lblSpeed, _speed, _lblZoom, _zoomOut, _zoomIn, _zoomFit });
 
         // Camera actions row
         _startCamera.AutoSize = true;
@@ -227,19 +243,21 @@ public sealed partial class MainForm
         _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _root.Dock = DockStyle.Fill;
         _root.Padding = new Padding(8);
-        _root.RowCount = 6;
+        _root.RowCount = 7;
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 35F));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 118F));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 65F));
         _root.Controls.Add(_serverRow, 0, 0);
         _root.Controls.Add(_cameraRow, 0, 1);
         _root.Controls.Add(_cameras, 0, 2);
         _root.Controls.Add(_playerRow, 0, 3);
-        _root.Controls.Add(_actionsRow, 0, 4);
-        _root.Controls.Add(_log, 0, 5);
+        _root.Controls.Add(_timeline, 0, 4);
+        _root.Controls.Add(_actionsRow, 0, 5);
+        _root.Controls.Add(_log, 0, 6);
 
         // Events
         _startServer.Click += new EventHandler(OnStartServerClick);
@@ -257,10 +275,10 @@ public sealed partial class MainForm
         _back10.Click += new EventHandler(OnBack10Click);
         _playPause.Click += new EventHandler(OnPlayPauseClick);
         _forward10.Click += new EventHandler(OnForward10Click);
-        _seekBar.MouseDown += new MouseEventHandler(OnSeekBarMouseDown);
-        _seekBar.MouseUp += new MouseEventHandler(OnSeekBarMouseUp);
-        _seekBar.KeyUp += new KeyEventHandler(OnSeekBarKeyUp);
-        _seekBar.Scroll += new EventHandler(OnSeekBarScroll);
+        _timeline.SeekRequested += new EventHandler<double>(OnTimelineSeek);
+        _zoomOut.Click += new EventHandler(OnZoomOutClick);
+        _zoomIn.Click += new EventHandler(OnZoomInClick);
+        _zoomFit.Click += new EventHandler(OnZoomFitClick);
         _speed.SelectedIndexChanged += new EventHandler(OnSpeedChanged);
 
         // Timer (refreshes camera status and the player position four times a second)
@@ -271,8 +289,8 @@ public sealed partial class MainForm
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         Font = new Font("Segoe UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(1000, 700);
-        MinimumSize = new Size(900, 600);
+        ClientSize = new Size(1000, 760);
+        MinimumSize = new Size(900, 660);
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MockRtsp - mock RTSP camera";
         // Docking runs from the last added control to the first, so the edge-docked status bar
@@ -282,7 +300,6 @@ public sealed partial class MainForm
 
         _serverRow.ResumeLayout(false);
         _cameraRow.ResumeLayout(false);
-        ((System.ComponentModel.ISupportInitialize)_seekBar).EndInit();
         _playerRow.ResumeLayout(false);
         _actionsRow.ResumeLayout(false);
         _root.ResumeLayout(false);

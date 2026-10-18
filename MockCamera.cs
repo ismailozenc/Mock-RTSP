@@ -122,6 +122,9 @@ public sealed class MockCamera : IDisposable
         }
     }
 
+    /// <summary>Size, frame rate and length of the video file.</summary>
+    public VideoInfo Source => _source;
+
     /// <summary>The length of the video file. Zero if FFmpeg did not report it.</summary>
     public TimeSpan Duration => TimeSpan.FromSeconds(_source.DurationSeconds);
 
