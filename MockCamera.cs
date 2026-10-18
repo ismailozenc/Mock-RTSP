@@ -36,6 +36,7 @@ public sealed class MockCamera : IDisposable
     private double? _seekTo;                        // a seek waiting for the pump
     private bool _paused;
     private double _speed = 1.0;
+    private IReadOnlyList<SkipRange> _skips = Array.Empty<SkipRange>();
 
     // The last lines FFmpeg wrote, kept to explain why a camera stopped.
     private readonly Queue<string> _ffmpegOutput = new();
@@ -147,6 +148,38 @@ public sealed class MockCamera : IDisposable
             lock (_control)
             {
                 return _paused;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parts of the video to jump over while streaming. Takes effect straight away; a range
+    /// covering the current position makes the camera jump past it.
+    /// </summary>
+    public IReadOnlyList<SkipRange> SkipRanges
+    {
+        get
+        {
+            lock (_control)
+            {
+                return _skips;
+            }
+        }
+        set
+        {
+            var normalized = MockRtsp.SkipRanges.Normalize(value ?? Array.Empty<SkipRange>(), _source.DurationSeconds);
+            bool loop = Options.Loop;
+            lock (_control)
+            {
+                _skips = normalized;
+
+                // Sitting still in a range that was just added: move past it now.
+                var (decision, target) = MockRtsp.SkipRanges.Resolve(_skips, _positionSeconds, _source.DurationSeconds, loop);
+                if (decision == MockRtsp.SkipRanges.Decision.JumpTo && _seekTo is null)
+                {
+                    _seekTo = target;
+                    _positionSeconds = target;
+                }
             }
         }
     }
@@ -427,8 +460,8 @@ public sealed class MockCamera : IDisposable
             }
 
             decoder = StartDecoder(start, format);
-            if (ReadFrame(ref decoder, format, frame, loop))
-                SetPosition(decoder!, format);
+            if (ReadFrame(ref decoder, format, next, loop))
+                Show(ref frame, ref next, decoder!, format, loop);
 
             var clock = Stopwatch.StartNew();
             long sent = 0;
@@ -456,10 +489,7 @@ public sealed class MockCamera : IDisposable
 
                     // Show the new position straight away, also while paused.
                     if (ReadFrame(ref decoder, format, next, loop))
-                    {
-                        (frame, next) = (next, frame);
-                        SetPosition(decoder!, format);
-                    }
+                        Show(ref frame, ref next, decoder!, format, loop);
                 }
                 else if (!paused)
                 {
@@ -469,8 +499,11 @@ public sealed class MockCamera : IDisposable
                         owed -= 1;
                         if (ReadFrame(ref decoder, format, next, loop))
                         {
-                            (frame, next) = (next, frame);
-                            SetPosition(decoder!, format);
+                            if (!Show(ref frame, ref next, decoder!, format, loop))
+                            {
+                                owed = 0;               // a skip range starts here; the jump comes next
+                                break;
+                            }
                         }
                         else
                         {
@@ -543,14 +576,39 @@ public sealed class MockCamera : IDisposable
         throw new InvalidOperationException("FFmpeg could not decode the video file from the start.");
     }
 
-    private void SetPosition(Decoder decoder, VideoFormat format)
+    /// <summary>
+    /// Makes the frame just read the one being sent, unless it lies in a skip range. Then it is
+    /// never shown: a jump past the range is scheduled instead, so viewers see a clean cut.
+    /// Returns false when the frame was skipped.
+    /// </summary>
+    private bool Show(ref byte[] frame, ref byte[] next, Decoder decoder, VideoFormat format, bool loop)
     {
+        double at = decoder.StartSeconds + (decoder.Frames - 1) / (double)format.FrameRate;
+
         lock (_control)
         {
-            // A seek requested meanwhile has already moved the position; keep that until it is done.
-            if (_seekTo is null)
-                _positionSeconds = decoder.StartSeconds + (decoder.Frames - 1) / (double)format.FrameRate;
+            // A seek requested meanwhile wins; this frame is from before it.
+            if (_seekTo is not null)
+                return false;
+
+            var (decision, target) = MockRtsp.SkipRanges.Resolve(_skips, at, _source.DurationSeconds, loop);
+            switch (decision)
+            {
+                case MockRtsp.SkipRanges.Decision.JumpTo:
+                    _seekTo = target;
+                    _positionSeconds = target;
+                    return false;
+
+                case MockRtsp.SkipRanges.Decision.EndReached:
+                    _paused = true;             // the rest of the video is skipped: hold the last frame
+                    return false;
+            }
+
+            _positionSeconds = at;
         }
+
+        (frame, next) = (next, frame);
+        return true;
     }
 
     private void MoveOnBy(TimeSpan elapsed)

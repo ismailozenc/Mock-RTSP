@@ -1,35 +1,51 @@
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
 namespace MockRtsp;
 
 /// <summary>
-/// A scrollable video timeline: a time ruler, a strip of thumbnails and a playhead.
-///   Click or drag     jump to that moment (SeekRequested is raised on release)
-///   Mouse wheel       scroll left and right
-///   Ctrl + wheel      zoom in and out around the mouse
+/// A scrollable timeline for one video: a time ruler, a bar with the skip ranges in red, and
+/// the playhead. Hovering shows a preview frame of that moment above the timeline.
+///   Click or drag           jump to that moment (SeekRequested, raised on release)
+///   Drag a red edge         move where a skip range starts or ends (SkipRangesChanged)
+///   Shift + drag            draw a new skip range
+///   Right-click             delete a skip range, add one, or clear them all
+///   Mouse wheel             scroll; Ctrl + wheel zooms around the mouse
 /// While playing, it scrolls by itself to keep the playhead in view, unless the user has
 /// just scrolled.
 /// </summary>
 public sealed class Timeline : Control
 {
     private static readonly double[] RulerSteps = { 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200 };
+    private const int EdgeGrab = 6;             // pixels either side of an edge that grab it
+
+    private enum DragMode { None, Seek, Edge, Create }
 
     private readonly HScrollBar _scroll = new();
+    private readonly PreviewPopup _preview = new();
     private readonly Dictionary<int, Bitmap> _bitmaps = new();
+    private readonly List<SkipRange> _skips = new();
     private ThumbnailStrip? _strip;
     private double _duration;
     private double _position;
     private double _pixelsPerSecond;            // 0 until the first layout picks a zoom
     private double _scrollSeconds;              // time at the left edge
-    private bool _dragging;
-    private double _dragSeconds;
-    private int _hoverX = -1;
     private DateTime _userScrolledAt = DateTime.MinValue;
     private bool _updatingScrollBar;
 
+    private DragMode _drag;
+    private double _dragSeconds;                // seek target, or the moving end of a new range
+    private double _createAnchor;
+    private int _edgeRange = -1;
+    private bool _edgeIsStart;
+    private int _hoverX = -1;
+
     /// <summary>Raised when the user picks a moment, with the time in seconds.</summary>
     public event EventHandler<double>? SeekRequested;
+
+    /// <summary>Raised after the user adds, moves or deletes skip ranges. Read SkipRanges for the new list.</summary>
+    public event EventHandler? SkipRangesChanged;
 
     public Timeline()
     {
@@ -46,7 +62,7 @@ public sealed class Timeline : Control
 
     // ===================================================================== what to show
 
-    /// <summary>Shows a video's thumbnails. Pass null when no camera is selected.</summary>
+    /// <summary>Shows a video: its length, and the preview frames used on hover. Null when no camera is selected.</summary>
     public void SetSource(ThumbnailStrip? strip, double durationSeconds)
     {
         if (ReferenceEquals(strip, _strip) && Math.Abs(durationSeconds - _duration) < 0.001)
@@ -57,12 +73,44 @@ public sealed class Timeline : Control
         _duration = Math.Max(0, durationSeconds);
         _pixelsPerSecond = 0;                   // pick a fresh zoom for this video
         _scrollSeconds = 0;
-        _dragging = false;
+        _drag = DragMode.None;
+        _skips.Clear();
+        PendingStart = null;
+        HidePreview();
         UpdateScrollBar();
         Invalidate();
     }
 
-    /// <summary>The playhead, in seconds. Ignored while the user drags.</summary>
+    /// <summary>The skip ranges shown. Changes from outside are ignored while the user is editing one.</summary>
+    public IReadOnlyList<SkipRange> SkipRanges => _skips;
+
+    public void SetSkipRanges(IReadOnlyList<SkipRange> ranges)
+    {
+        if (_drag is DragMode.Edge or DragMode.Create)
+            return;
+
+        if (_skips.SequenceEqual(ranges))
+            return;
+
+        _skips.Clear();
+        _skips.AddRange(ranges);
+        Invalidate();
+    }
+
+    /// <summary>Where a skip range started with "Skip start" begins, shown as an orange line. Null for none.</summary>
+    public double? PendingStart
+    {
+        get => _pendingStart;
+        set
+        {
+            _pendingStart = value;
+            Invalidate();
+        }
+    }
+
+    private double? _pendingStart;
+
+    /// <summary>The playhead, in seconds.</summary>
     public double Position
     {
         get => _position;
@@ -107,14 +155,13 @@ public sealed class Timeline : Control
         Invalidate();
     }
 
-    /// <summary>First view of a video: thumbnails at their own width, about one per second.</summary>
+    /// <summary>First view of a video: the whole of it, up to 2 minutes; longer ones scroll.</summary>
     private void EnsureZoom()
     {
-        if (_pixelsPerSecond > 0 || ViewWidth <= 0)
+        if (_pixelsPerSecond > 0 || ViewWidth <= 0 || _duration <= 0)
             return;
 
-        double natural = _strip is null ? 60 : TileWidth / _strip.IntervalSeconds;
-        _pixelsPerSecond = Clamp(natural, MinPixelsPerSecond, MaxPixelsPerSecond);
+        _pixelsPerSecond = Clamp(ViewWidth / Math.Min(_duration, 120), MinPixelsPerSecond, MaxPixelsPerSecond);
 
         // Open on the playhead, not on the start of the video.
         _scrollSeconds = _position - ViewWidth * 0.1 / _pixelsPerSecond;
@@ -127,20 +174,8 @@ public sealed class Timeline : Control
 
     private int RulerHeight => Font.Height + 6;
 
-    private Rectangle ThumbArea =>
+    private Rectangle BarArea =>
         new(0, RulerHeight, ViewWidth, Math.Max(1, ClientSize.Height - RulerHeight - _scroll.Height));
-
-    /// <summary>Width of one thumbnail drawn at the strip's height, keeping its shape.</summary>
-    private int TileWidth
-    {
-        get
-        {
-            if (_strip is null || _strip.Height == 0)
-                return 96;
-
-            return Math.Max(8, (int)Math.Round(ThumbArea.Height * (double)_strip.Width / _strip.Height));
-        }
-    }
 
     private int TimeToX(double seconds) => (int)Math.Round((seconds - _scrollSeconds) * _pixelsPerSecond);
 
@@ -154,7 +189,7 @@ public sealed class Timeline : Control
 
     private void FollowPlayhead()
     {
-        if (_dragging || _pixelsPerSecond <= 0 || DateTime.UtcNow - _userScrolledAt < TimeSpan.FromSeconds(4))
+        if (_drag != DragMode.None || _pixelsPerSecond <= 0 || DateTime.UtcNow - _userScrolledAt < TimeSpan.FromSeconds(4))
             return;
 
         int x = TimeToX(_position);
@@ -186,6 +221,27 @@ public sealed class Timeline : Control
         }
     }
 
+    /// <summary>The skip range edge under x, nearest first, or (-1, false).</summary>
+    private (int Range, bool IsStart) EdgeAt(int x)
+    {
+        int best = -1;
+        bool bestIsStart = false;
+        int bestDistance = EdgeGrab + 1;
+
+        for (int i = 0; i < _skips.Count; i++)
+        {
+            int ds = Math.Abs(TimeToX(_skips[i].Start) - x);
+            int de = Math.Abs(TimeToX(_skips[i].End) - x);
+
+            if (ds < bestDistance) { best = i; bestIsStart = true; bestDistance = ds; }
+            if (de < bestDistance) { best = i; bestIsStart = false; bestDistance = de; }
+        }
+
+        return (best, bestIsStart);
+    }
+
+    private int RangeAt(double seconds) => _skips.FindIndex(r => r.Contains(seconds));
+
     // ===================================================================== painting
 
     protected override void OnPaint(PaintEventArgs e)
@@ -203,14 +259,18 @@ public sealed class Timeline : Control
                 return;
             }
 
-            DrawThumbnails(g);
+            DrawBar(g);
+            DrawSkips(g);
             DrawRuler(g);
             DrawStatus(g);
 
-            if (_hoverX >= 0 && !_dragging)
-                DrawMarker(g, _hoverX, Color.FromArgb(150, 255, 255, 255), FormatTime(XToTime(_hoverX)), false);
+            if (_pendingStart is double pending)
+                DrawMarker(g, TimeToX(pending), Color.Orange, "skip from " + FormatPrecise(pending), true);
 
-            if (_dragging)
+            if (_hoverX >= 0 && _drag == DragMode.None)
+                DrawMarker(g, _hoverX, Color.FromArgb(150, 255, 255, 255), null, false);
+
+            if (_drag == DragMode.Seek)
                 DrawMarker(g, TimeToX(_dragSeconds), Color.Gold, FormatTime(_dragSeconds), true);
 
             DrawMarker(g, TimeToX(_position), Color.FromArgb(235, 64, 52), null, true);
@@ -221,44 +281,66 @@ public sealed class Timeline : Control
         }
     }
 
-    private void DrawThumbnails(Graphics g)
+    private void DrawBar(Graphics g)
     {
-        var area = ThumbArea;
-        int tile = TileWidth;
-        int endX = TimeToX(_duration);
+        var bar = BarArea;
+        int endX = Clamp(TimeToX(_duration), 0, ViewWidth);
+
+        using (var track = new SolidBrush(Color.FromArgb(58, 64, 74)))
+            g.FillRectangle(track, 0, bar.Top + 4, endX, bar.Height - 8);
 
         using (var past = new SolidBrush(Color.FromArgb(20, 20, 22)))
-            g.FillRectangle(past, Math.Max(endX, 0), area.Top, Math.Max(0, ViewWidth - endX), area.Height);
+            g.FillRectangle(past, endX, bar.Top, ViewWidth - endX, bar.Height);
+    }
 
-        // Tiles sit at fixed positions on the whole timeline, so they do not shimmer while scrolling.
-        double startPx = _scrollSeconds * _pixelsPerSecond;
-        long firstTile = (long)Math.Floor(startPx / tile);
+    private void DrawSkips(Graphics g)
+    {
+        var bar = BarArea;
+        using var fill = new SolidBrush(Color.FromArgb(170, 190, 38, 38));
+        using var hatch = new HatchBrush(HatchStyle.BackwardDiagonal, Color.FromArgb(60, 255, 255, 255), Color.Transparent);
+        using var edge = new SolidBrush(Color.FromArgb(235, 235, 235));
+        using var activeEdge = new SolidBrush(Color.Gold);
 
-        using var placeholder = new SolidBrush(Color.FromArgb(48, 48, 54));
-        using var gap = new Pen(Color.FromArgb(32, 32, 36));
+        var (hoverRange, hoverIsStart) = _hoverX >= 0 && _drag == DragMode.None ? EdgeAt(_hoverX) : (-1, false);
 
-        for (long n = firstTile; ; n++)
+        for (int i = 0; i < _skips.Count; i++)
         {
-            int x = (int)Math.Round(n * tile - startPx);
-            if (x >= ViewWidth || x >= endX)
-                break;
+            int x1 = TimeToX(_skips[i].Start);
+            int x2 = TimeToX(_skips[i].End);
+            if (x2 < 0 || x1 > ViewWidth)
+                continue;
 
-            double seconds = n * tile / _pixelsPerSecond;
-            int width = Math.Min(tile, endX - x);
-            var bitmap = BitmapFor(seconds);
+            var rect = new Rectangle(x1, bar.Top + 2, Math.Max(1, x2 - x1), bar.Height - 4);
+            g.FillRectangle(fill, rect);
+            g.FillRectangle(hatch, rect);
 
-            if (bitmap is null)
-            {
-                g.FillRectangle(placeholder, x, area.Top, width, area.Height);
-            }
-            else
-            {
-                var source = new Rectangle(0, 0, (int)Math.Round(bitmap.Width * (double)width / tile), bitmap.Height);
-                g.DrawImage(bitmap, new Rectangle(x, area.Top, width, area.Height), source, GraphicsUnit.Pixel);
-            }
+            if (rect.Width > 46)
+                TextRenderer.DrawText(g, $"skip {_skips[i].Length:0.0} s", Font, rect, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-            g.DrawLine(gap, x, area.Top, x, area.Bottom);
+            bool startActive = (_drag == DragMode.Edge && _edgeRange == i && _edgeIsStart) || (hoverRange == i && hoverIsStart);
+            bool endActive = (_drag == DragMode.Edge && _edgeRange == i && !_edgeIsStart) || (hoverRange == i && !hoverIsStart);
+            DrawEdge(g, x1, rect, startActive ? activeEdge : edge);
+            DrawEdge(g, x2, rect, endActive ? activeEdge : edge);
         }
+
+        if (_drag == DragMode.Create)
+        {
+            int x1 = TimeToX(Math.Min(_createAnchor, _dragSeconds));
+            int x2 = TimeToX(Math.Max(_createAnchor, _dragSeconds));
+            using var creating = new SolidBrush(Color.FromArgb(150, 255, 140, 0));
+            g.FillRectangle(creating, x1, bar.Top + 2, Math.Max(1, x2 - x1), bar.Height - 4);
+        }
+    }
+
+    /// <summary>A grab handle: a light bar with two grip lines.</summary>
+    private static void DrawEdge(Graphics g, int x, Rectangle range, Brush brush)
+    {
+        g.FillRectangle(brush, x - 2, range.Top, 4, range.Height);
+        using var grip = new Pen(Color.FromArgb(90, 0, 0, 0));
+        int mid = range.Top + range.Height / 2;
+        g.DrawLine(grip, x - 1, mid - 5, x - 1, mid + 5);
+        g.DrawLine(grip, x + 1, mid - 5, x + 1, mid + 5);
     }
 
     private void DrawRuler(Graphics g)
@@ -278,6 +360,7 @@ public sealed class Timeline : Control
                 break;
             }
         }
+
         double minor = step / 5;
         double first = Math.Floor(_scrollSeconds / minor) * minor;
 
@@ -298,14 +381,9 @@ public sealed class Timeline : Control
 
     private void DrawStatus(Graphics g)
     {
-        if (_strip is null)
-            return;
-
-        string? text = _strip.Error is not null
-            ? "No thumbnails: " + _strip.Error
-            : !_strip.IsComplete
-                ? $"Making thumbnails {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
-                : null;
+        string? text = _strip is { IsComplete: false, Error: null }
+            ? $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
+            : null;
 
         if (text is null)
             return;
@@ -338,13 +416,52 @@ public sealed class Timeline : Control
 
         var size = TextRenderer.MeasureText(label, Font);
         int left = Clamp(x + 4, 0, Math.Max(0, ViewWidth - size.Width - 6));
-        var box = new Rectangle(left, ThumbArea.Top + 2, size.Width + 4, size.Height);
-        using (var back = new SolidBrush(Color.FromArgb(210, 0, 0, 0)))
+        var box = new Rectangle(left, 1, size.Width + 4, RulerHeight - 2);
+        using (var back = new SolidBrush(Color.FromArgb(220, 0, 0, 0)))
             g.FillRectangle(back, box);
-        TextRenderer.DrawText(g, label, Font, box, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(g, label, Font, box, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
 
-    /// <summary>The thumbnail for a moment, turned into a bitmap the first time it is drawn.</summary>
+    // ===================================================================== hover preview
+
+    /// <summary>Shows the frame at a moment in the floating preview, above x.</summary>
+    private void ShowPreview(int x, double seconds)
+    {
+        if (_duration <= 0)
+            return;
+
+        int index = _skips.FindIndex(r => r.Contains(seconds));
+        string caption = FormatPrecise(seconds) + (index >= 0 ? "  (skipped)" : string.Empty);
+
+        Bitmap? image = BitmapFor(seconds);
+        string? note = image is not null ? null
+            : _strip is null ? "No preview"
+            : _strip.Error is not null ? "No preview: " + _strip.Error
+            : $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%";
+
+        var imageSize = _strip is null ? new Size(192, 108) : new Size(_strip.Width, _strip.Height);
+        _preview.SetContent(image, imageSize, caption, note, index >= 0);
+
+        // Centred over the mouse, just above the timeline, kept on the screen.
+        var screen = Screen.FromControl(this).WorkingArea;
+        var origin = PointToScreen(new Point(x, 0));
+        int left = Clamp(origin.X - _preview.Width / 2, screen.Left, screen.Right - _preview.Width);
+        int top = origin.Y - _preview.Height - 6;
+        if (top < screen.Top)
+            top = PointToScreen(new Point(0, ClientSize.Height)).Y + 6;
+
+        _preview.Location = new Point(left, top);
+        if (!_preview.Visible)
+            _preview.Show(FindForm());
+    }
+
+    private void HidePreview()
+    {
+        if (_preview.Visible)
+            _preview.Hide();
+    }
+
+    /// <summary>The preview frame for a moment, turned into a bitmap the first time it is needed.</summary>
     private Bitmap? BitmapFor(double seconds)
     {
         if (_strip is null)
@@ -389,16 +506,6 @@ public sealed class Timeline : Control
         _bitmaps.Clear();
     }
 
-    private static double Clamp(double value, double min, double max) => value < min ? min : value > max ? max : value;
-
-    private static int Clamp(int value, int min, int max) => value < min ? min : value > max ? max : value;
-
-    private static string FormatTime(double seconds)
-    {
-        var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
-    }
-
     // ===================================================================== mouse
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -406,57 +513,172 @@ public sealed class Timeline : Control
         base.OnMouseDown(e);
         Focus();
 
-        if (e.Button != MouseButtons.Left || _duration <= 0 || !Enabled)
+        if (e.Button != MouseButtons.Left || _duration <= 0 || !Enabled || e.Y >= ClientSize.Height - _scroll.Height)
             return;
 
-        _dragging = true;
-        _dragSeconds = XToTime(e.X);
+        var (range, isStart) = EdgeAt(e.X);
+
+        if (range >= 0)
+        {
+            _drag = DragMode.Edge;
+            _edgeRange = range;
+            _edgeIsStart = isStart;
+        }
+        else if ((ModifierKeys & Keys.Shift) != 0)
+        {
+            _drag = DragMode.Create;
+            _createAnchor = _dragSeconds = XToTime(e.X);
+        }
+        else
+        {
+            _drag = DragMode.Seek;
+            _dragSeconds = XToTime(e.X);
+        }
+
         Capture = true;
-        Invalidate();
+        OnMouseMove(e);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
 
-        if (_dragging)
+        if (_drag != DragMode.None && (e.X < 0 || e.X > ViewWidth))
         {
             // Dragging past an edge scrolls the timeline.
-            if (e.X < 0 || e.X > ViewWidth)
-            {
-                _scrollSeconds += (e.X < 0 ? e.X : e.X - ViewWidth) / Math.Max(_pixelsPerSecond, 0.0001) / 4;
-                ClampScroll();
-                UpdateScrollBar();
-            }
+            _scrollSeconds += (e.X < 0 ? e.X : e.X - ViewWidth) / Math.Max(_pixelsPerSecond, 0.0001) / 4;
+            ClampScroll();
+            UpdateScrollBar();
+        }
 
-            _dragSeconds = XToTime(Clamp(e.X, 0, ViewWidth));
+        int x = Clamp(e.X, 0, ViewWidth);
+        double seconds = XToTime(x);
+
+        switch (_drag)
+        {
+            case DragMode.Edge:
+                seconds = MoveEdge(seconds);
+                break;
+
+            case DragMode.Create:
+            case DragMode.Seek:
+                _dragSeconds = seconds;
+                break;
+
+            default:
+                bool overBar = e.Y < ClientSize.Height - _scroll.Height;
+                _hoverX = overBar ? e.X : -1;
+                Cursor = overBar && EdgeAt(e.X).Range >= 0 ? Cursors.SizeWE : Cursors.Default;
+                if (!overBar)
+                {
+                    HidePreview();
+                    Invalidate();
+                    return;
+                }
+                break;
+        }
+
+        // While editing an edge the preview shows the exact frame at that edge.
+        ShowPreview(_drag == DragMode.Edge ? TimeToX(seconds) : x, seconds);
+        Invalidate();
+    }
+
+    /// <summary>Moves the dragged edge, never past its neighbours and never shorter than the minimum.</summary>
+    private double MoveEdge(double seconds)
+    {
+        var range = _skips[_edgeRange];
+        double previousEnd = _edgeRange > 0 ? _skips[_edgeRange - 1].End : 0;
+        double nextStart = _edgeRange < _skips.Count - 1 ? _skips[_edgeRange + 1].Start : _duration;
+
+        if (_edgeIsStart)
+        {
+            seconds = Clamp(seconds, previousEnd, range.End - MockRtsp.SkipRanges.MinLength);
+            _skips[_edgeRange] = range with { Start = seconds };
         }
         else
         {
-            _hoverX = e.Y < ClientSize.Height - _scroll.Height ? e.X : -1;
+            seconds = Clamp(seconds, range.Start + MockRtsp.SkipRanges.MinLength, nextStart);
+            _skips[_edgeRange] = range with { End = seconds };
         }
 
-        Invalidate();
+        return seconds;
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
 
-        if (!_dragging)
+        if (e.Button == MouseButtons.Right && _drag == DragMode.None && _duration > 0)
+        {
+            ShowMenu(e.Location);
             return;
+        }
 
-        _dragging = false;
+        var drag = _drag;
+        _drag = DragMode.None;
         Capture = false;
-        _position = _dragSeconds;                   // show it there straight away
+
+        switch (drag)
+        {
+            case DragMode.Seek:
+                _position = _dragSeconds;           // show it there straight away
+                SeekRequested?.Invoke(this, _dragSeconds);
+                break;
+
+            case DragMode.Edge:
+                ReplaceSkips(_skips.ToList());
+                break;
+
+            case DragMode.Create:
+                if (Math.Abs(_dragSeconds - _createAnchor) >= MockRtsp.SkipRanges.MinLength)
+                    ReplaceSkips(_skips.Append(new SkipRange(Math.Min(_createAnchor, _dragSeconds), Math.Max(_createAnchor, _dragSeconds))).ToList());
+                break;
+        }
+
         Invalidate();
-        SeekRequested?.Invoke(this, _dragSeconds);
+    }
+
+    private void ShowMenu(Point location)
+    {
+        HidePreview();
+        double seconds = XToTime(location.X);
+        int index = RangeAt(seconds);
+        var menu = new ContextMenuStrip();
+
+        if (index >= 0)
+        {
+            var range = _skips[index];
+            menu.Items.Add($"Delete skip {FormatPrecise(range.Start)} - {FormatPrecise(range.End)}", null,
+                (_, _) => ReplaceSkips(_skips.Where((_, i) => i != index).ToList()));
+        }
+        else
+        {
+            menu.Items.Add($"Add a 5 s skip at {FormatPrecise(seconds)}", null,
+                (_, _) => ReplaceSkips(_skips.Append(new SkipRange(seconds, Math.Min(_duration, seconds + 5))).ToList()));
+        }
+
+        var clear = menu.Items.Add("Clear all skips", null, (_, _) => ReplaceSkips(new List<SkipRange>()));
+        clear.Enabled = _skips.Count > 0;
+
+        menu.Closed += (_, _) => BeginInvoke(new Action(menu.Dispose));
+        menu.Show(this, location);
+    }
+
+    private void ReplaceSkips(List<SkipRange> ranges)
+    {
+        var normalized = MockRtsp.SkipRanges.Normalize(ranges, _duration);
+        _skips.Clear();
+        _skips.AddRange(normalized);
+        Invalidate();
+        SkipRangesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
         _hoverX = -1;
+        if (_drag == DragMode.None)
+            HidePreview();
         Invalidate();
     }
 
@@ -505,8 +727,113 @@ public sealed class Timeline : Control
     protected override void Dispose(bool disposing)
     {
         if (disposing)
+        {
             ClearBitmaps();
+            _preview.Dispose();
+        }
 
         base.Dispose(disposing);
+    }
+
+    // ===================================================================== helpers
+
+    private static double Clamp(double value, double min, double max) => value < min ? min : value > max ? max : value;
+
+    private static int Clamp(int value, int min, int max) => value < min ? min : value > max ? max : value;
+
+    /// <summary>With tenths of a second, for skip edges, e.g. "01:23.4".</summary>
+    private static string FormatPrecise(double seconds)
+    {
+        var time = TimeSpan.FromSeconds(Math.Max(0, Math.Round(seconds, 1)));
+        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss\.f") : time.ToString(@"mm\:ss\.f");
+    }
+
+    private static string FormatTime(double seconds)
+    {
+        var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
+    }
+
+    /// <summary>
+    /// The floating preview: a borderless window that never takes focus, showing one frame
+    /// and its time.
+    /// </summary>
+    private sealed class PreviewPopup : Form
+    {
+        private Bitmap? _image;
+        private string _caption = string.Empty;
+        private string? _note;
+        private bool _skipped;
+        private Size _imageSize = new(192, 108);
+
+        public PreviewPopup()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = Color.Black;
+            DoubleBuffered = true;
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                const int WS_EX_TOOLWINDOW = 0x80;
+                const int WS_EX_NOACTIVATE = 0x08000000;
+                var cp = base.CreateParams;
+                cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+                return cp;
+            }
+        }
+
+        public void SetContent(Bitmap? image, Size imageSize, string caption, string? note, bool skipped)
+        {
+            _image = image;
+            _imageSize = imageSize;
+            _caption = caption;
+            _note = note;
+            _skipped = skipped;
+
+            int captionHeight = Font.Height + 6;
+            var size = new Size(_imageSize.Width + 4, _imageSize.Height + captionHeight + 4);
+            if (Size != size)
+                Size = size;
+
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            var imageRect = new Rectangle(2, 2, _imageSize.Width, _imageSize.Height);
+
+            if (_image is not null)
+            {
+                g.DrawImage(_image, imageRect);
+            }
+            else
+            {
+                using var empty = new SolidBrush(Color.FromArgb(40, 40, 44));
+                g.FillRectangle(empty, imageRect);
+                TextRenderer.DrawText(g, _note ?? string.Empty, Font, imageRect, Color.Gray,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            }
+
+            if (_skipped)
+            {
+                using var tint = new SolidBrush(Color.FromArgb(90, 200, 30, 30));
+                g.FillRectangle(tint, imageRect);
+            }
+
+            var captionRect = new Rectangle(2, imageRect.Bottom, _imageSize.Width, ClientSize.Height - imageRect.Bottom - 2);
+            TextRenderer.DrawText(g, _caption, Font, captionRect, _skipped ? Color.LightCoral : Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+            using var border = new Pen(Color.FromArgb(110, 110, 120));
+            g.DrawRectangle(border, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        }
     }
 }

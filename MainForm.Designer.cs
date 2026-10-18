@@ -28,6 +28,8 @@ public sealed partial class MainForm
     private Label _timeLabel = null!;
     private Label _lblSpeed = null!;
     private ComboBox _speed = null!;
+    private Button _skipStart = null!;
+    private Button _skipEnd = null!;
     private Label _lblZoom = null!;
     private Button _zoomOut = null!;
     private Button _zoomIn = null!;
@@ -82,6 +84,8 @@ public sealed partial class MainForm
         _timeLabel = new Label();
         _lblSpeed = new Label();
         _speed = new ComboBox();
+        _skipStart = new Button();
+        _skipEnd = new Button();
         _lblZoom = new Label();
         _zoomOut = new Button();
         _zoomIn = new Button();
@@ -181,6 +185,11 @@ public sealed partial class MainForm
         _speed.Items.AddRange(new object[] { "0.25x", "0.5x", "1x", "2x", "4x" });
         _speed.Margin = new Padding(0, 4, 0, 0);
         _speed.Width = 70;
+        _skipStart.Margin = new Padding(18, 3, 3, 3);
+        _skipStart.Size = new Size(80, 28);
+        _skipStart.Text = "Skip start";
+        _skipEnd.Size = new Size(80, 28);
+        _skipEnd.Text = "Skip end";
         _lblZoom.AutoSize = true;
         _lblZoom.Margin = new Padding(18, 7, 2, 0);
         _lblZoom.Text = "Timeline:";
@@ -191,8 +200,9 @@ public sealed partial class MainForm
         _zoomFit.Size = new Size(70, 28);
         _zoomFit.Text = "Whole";
 
-        // Timeline: thumbnails of the selected camera's video, with a playhead.
-        // Click or drag to jump, wheel to scroll, Ctrl+wheel to zoom.
+        // Timeline: the selected camera's video, its skip ranges (red) and the playhead.
+        // Hover for a preview frame. Click or drag to jump, drag a red edge to move it,
+        // Shift+drag to add a skip, right-click to delete. Wheel scrolls, Ctrl+wheel zooms.
         _timeline.Dock = DockStyle.Fill;
         _timeline.Margin = new Padding(0, 2, 0, 4);
 
@@ -200,7 +210,7 @@ public sealed partial class MainForm
         _playerRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _playerRow.Margin = new Padding(0, 4, 0, 2);
         _playerRow.WrapContents = true;
-        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _timeLabel, _lblSpeed, _speed, _lblZoom, _zoomOut, _zoomIn, _zoomFit });
+        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _timeLabel, _lblSpeed, _speed, _skipStart, _skipEnd, _lblZoom, _zoomOut, _zoomIn, _zoomFit });
 
         // Camera actions row
         _startCamera.AutoSize = true;
@@ -248,7 +258,7 @@ public sealed partial class MainForm
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.Percent, 35F));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 118F));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80F));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.Percent, 65F));
         _root.Controls.Add(_serverRow, 0, 0);
@@ -276,6 +286,9 @@ public sealed partial class MainForm
         _playPause.Click += new EventHandler(OnPlayPauseClick);
         _forward10.Click += new EventHandler(OnForward10Click);
         _timeline.SeekRequested += new EventHandler<double>(OnTimelineSeek);
+        _timeline.SkipRangesChanged += new EventHandler(OnTimelineSkipsChanged);
+        _skipStart.Click += new EventHandler(OnSkipStartClick);
+        _skipEnd.Click += new EventHandler(OnSkipEndClick);
         _zoomOut.Click += new EventHandler(OnZoomOutClick);
         _zoomIn.Click += new EventHandler(OnZoomInClick);
         _zoomFit.Click += new EventHandler(OnZoomFitClick);
@@ -289,8 +302,8 @@ public sealed partial class MainForm
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         Font = new Font("Segoe UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(1000, 760);
-        MinimumSize = new Size(900, 660);
+        ClientSize = new Size(1040, 720);
+        MinimumSize = new Size(940, 620);
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MockRtsp - mock RTSP camera";
         // Docking runs from the last added control to the first, so the edge-docked status bar

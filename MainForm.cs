@@ -44,6 +44,12 @@ public sealed partial class MainForm : Form
 
     // Thumbnails per video file, shared by cameras that play the same file. Made in the background.
     private readonly Dictionary<string, ThumbnailStrip> _thumbnails = new(StringComparer.OrdinalIgnoreCase);
+
+    // Skip ranges per video file, shared by cameras that play the same file and saved next to it.
+    private readonly Dictionary<string, IReadOnlyList<SkipRange>> _skips = new(StringComparer.OrdinalIgnoreCase);
+
+    // A skip range started with "Skip start" and waiting for "Skip end".
+    private (string File, double Start)? _pendingSkip;
     private bool _updatingPlayer;       // set while code (not the user) changes the player controls
 
     public MainForm()
@@ -328,6 +334,14 @@ public sealed partial class MainForm : Form
         if (!_thumbnails.ContainsKey(source))
             _thumbnails[source] = ThumbnailStrip.Start(RequireFfmpeg(), source, camera.Source);
 
+        // Skip ranges saved next to the video come back with it.
+        if (!_skips.TryGetValue(source, out var skips))
+        {
+            skips = LoadSkips(source, camera.Duration.TotalSeconds);
+            _skips[source] = skips;
+        }
+        camera.SkipRanges = skips;
+
         RecentFiles.Add(source);
         RefreshRecentFiles();
 
@@ -433,6 +447,13 @@ public sealed partial class MainForm : Form
         return size + ", " + rate + bitrate;
     }
 
+    /// <summary>With tenths of a second, for skip edges, e.g. "01:23.4".</summary>
+    private static string FormatPrecise(double seconds)
+    {
+        var time = TimeSpan.FromSeconds(Math.Max(0, Math.Round(seconds, 1)));
+        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss\.f") : time.ToString(@"mm\:ss\.f");
+    }
+
     private static string FormatTime(TimeSpan time) =>
         time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
 
@@ -460,6 +481,95 @@ public sealed partial class MainForm : Form
     private void OnZoomOutClick(object? sender, EventArgs e) => _timeline.ZoomOut();
 
     private void OnZoomFitClick(object? sender, EventArgs e) => _timeline.ZoomToFit();
+
+    // ---- Skip ranges: parts of a video the cameras jump over, saved next to the video ----
+
+    private void OnSkipStartClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+        double start = entry.Camera.Position.TotalSeconds;
+
+        _pendingSkip = (entry.SourceFile, start);
+        Log($"'{entry.StreamPath}': skip starts at {FormatPrecise(start)}. Move to where it should end and click Skip end.");
+        UpdatePlayer();
+    }, "Skip start");
+
+    private void OnSkipEndClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+
+        if (_pendingSkip is not { } pending || !string.Equals(pending.File, entry.SourceFile, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Click Skip start first, at the moment the skip should begin.");
+
+        double end = entry.Camera.Position.TotalSeconds;
+        _pendingSkip = null;
+
+        if (Math.Abs(end - pending.Start) < SkipRanges.MinLength)
+            throw new InvalidOperationException("The skip is too short. Move the playhead further from where it starts.");
+
+        var current = _skips.TryGetValue(entry.SourceFile, out var list) ? list : Array.Empty<SkipRange>();
+        SetSkips(entry.SourceFile, current.Append(new SkipRange(Math.Min(pending.Start, end), Math.Max(pending.Start, end))),
+            entry.Camera.Duration.TotalSeconds);
+        UpdatePlayer();
+    }, "Skip end");
+
+    /// <summary>The user drew, moved or deleted skip ranges on the timeline.</summary>
+    private void OnTimelineSkipsChanged(object? sender, EventArgs e) => Safe(() =>
+    {
+        var entry = SelectedEntry;
+        if (entry is not null)
+            SetSkips(entry.SourceFile, _timeline.SkipRanges, entry.Camera.Duration.TotalSeconds);
+    }, "Skip ranges");
+
+    /// <summary>
+    /// Applies a video's skip ranges to every camera playing it, and saves them next to the video.
+    /// </summary>
+    private void SetSkips(string file, IEnumerable<SkipRange> ranges, double duration)
+    {
+        var normalized = SkipRanges.Normalize(ranges, duration);
+        _skips[file] = normalized;
+
+        foreach (var entry in _entries.Where(x => string.Equals(x.SourceFile, file, StringComparison.OrdinalIgnoreCase)))
+            entry.Camera.SkipRanges = normalized;
+
+        if (!SkipRanges.LeavesSomethingToPlay(normalized, duration))
+            Log("Every part of the video is marked to skip, so the skips are ignored until some are removed.");
+
+        try
+        {
+            SkipRangeFile.Save(file, normalized);
+            Log(normalized.Count == 0
+                ? $"No skips left for {Path.GetFileName(file)}; removed {Path.GetFileName(SkipRangeFile.PathFor(file))}."
+                : $"Saved {normalized.Count} skip(s) to {Path.GetFileName(SkipRangeFile.PathFor(file))}: "
+                  + string.Join(", ", normalized.Select(r => $"{FormatPrecise(r.Start)}-{FormatPrecise(r.End)}")));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ErrorReporter.Report(ex, $"Saving skips for {file}");
+            Log($"ERROR: the skips are in use but could not be saved next to the video ({ex.Message}). "
+                + "They will be lost when the app closes. Check that the video's folder is writable.");
+        }
+
+        _timeline.SetSkipRanges(normalized);
+    }
+
+    private List<SkipRange> LoadSkips(string file, double duration)
+    {
+        try
+        {
+            var ranges = SkipRangeFile.Load(file, duration);
+            if (ranges.Count > 0)
+                Log($"Loaded {ranges.Count} skip(s) from {Path.GetFileName(SkipRangeFile.PathFor(file))}.");
+            return ranges;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            ErrorReporter.Report(ex, $"Loading skips for {file}");
+            Log($"ERROR: could not read the skips saved next to the video ({ex.Message}). Playing without skips; "
+                + "the file is left as it is until you change the skips.");
+            return new List<SkipRange>();
+        }
+    }
 
     private void OnSpeedChanged(object? sender, EventArgs e)
     {
@@ -518,6 +628,8 @@ public sealed partial class MainForm : Form
         _zoomOut.Enabled = entry is not null;
         _zoomIn.Enabled = entry is not null;
         _zoomFit.Enabled = entry is not null;
+        _skipStart.Enabled = enabled;
+        _skipEnd.Enabled = enabled && _pendingSkip is not null;
         _timeline.Enabled = enabled;
 
         if (entry is null)
@@ -537,6 +649,9 @@ public sealed partial class MainForm : Form
 
             _thumbnails.TryGetValue(entry.SourceFile, out var strip);
             _timeline.SetSource(strip, camera.Duration.TotalSeconds);
+            _timeline.SetSkipRanges(_skips.TryGetValue(entry.SourceFile, out var skips) ? skips : Array.Empty<SkipRange>());
+            _timeline.PendingStart = _pendingSkip is { } pending
+                && string.Equals(pending.File, entry.SourceFile, StringComparison.OrdinalIgnoreCase) ? pending.Start : null;
             _timeline.Position = camera.Position.TotalSeconds;
             _timeline.Invalidate();             // new thumbnails may have arrived
 
@@ -590,6 +705,7 @@ public sealed partial class MainForm : Form
             && _thumbnails.TryGetValue(entry.SourceFile, out var strip))
         {
             _thumbnails.Remove(entry.SourceFile);
+            _skips.Remove(entry.SourceFile);
             strip.Dispose();
         }
 

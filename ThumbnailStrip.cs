@@ -62,14 +62,14 @@ public sealed class ThumbnailStrip : IDisposable
     /// Starts making thumbnails in the background and returns straight away.
     /// About one per second for short videos, at most 600 for long ones.
     /// </summary>
-    public static ThumbnailStrip Start(string ffmpegPath, string file, VideoInfo source, int height = 72)
+    public static ThumbnailStrip Start(string ffmpegPath, string file, VideoInfo source, int height = 108)
     {
         double duration = Math.Max(source.DurationSeconds, 1);
         double interval = Math.Max(1, Math.Ceiling(duration / 600));
         int expected = Math.Max(1, (int)Math.Ceiling(duration / interval));
 
         double aspect = source.Height > 0 ? (double)source.Width / source.Height : 16.0 / 9.0;
-        int width = Math.Clamp((int)Math.Round(height * aspect) & ~1, 32, 256);
+        int width = Math.Clamp((int)Math.Round(height * aspect) & ~1, 32, 384);
 
         var strip = new ThumbnailStrip(width, height, interval, expected);
         _ = Task.Run(() => strip.Generate(ffmpegPath, file, duration));
