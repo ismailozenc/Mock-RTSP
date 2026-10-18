@@ -23,6 +23,14 @@ public sealed partial class OptionsDialog
     private Label _ffIntro = null!;
     private Label _hdrTiming = null!;
     private CheckBox _loop = null!;
+    private Label _hdrMotion = null!;
+    private CheckBox _autoScan = null!;
+    private Label _lblMotionThreshold = null!;
+    private NumericUpDown _motionThreshold = null!;
+    private Label _lblMinStill = null!;
+    private NumericUpDown _minStill = null!;
+    private Label _lblMotionPadding = null!;
+    private NumericUpDown _motionPadding = null!;
     private Label _hdrEncode = null!;
     private Label _lblBitrate = null!;
     private NumericUpDown _bitrate = null!;
@@ -93,6 +101,14 @@ public sealed partial class OptionsDialog
         _ffIntro = new Label();
         _hdrTiming = new Label();
         _loop = new CheckBox();
+        _hdrMotion = new Label();
+        _autoScan = new CheckBox();
+        _lblMotionThreshold = new Label();
+        _motionThreshold = new NumericUpDown();
+        _lblMinStill = new Label();
+        _minStill = new NumericUpDown();
+        _lblMotionPadding = new Label();
+        _motionPadding = new NumericUpDown();
         _hdrEncode = new Label();
         _lblBitrate = new Label();
         _bitrate = new NumericUpDown();
@@ -181,7 +197,12 @@ public sealed partial class OptionsDialog
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _ffGrid.Dock = DockStyle.Top;
-        _ffGrid.RowCount = 12;
+        _ffGrid.RowCount = 17;
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -197,24 +218,34 @@ public sealed partial class OptionsDialog
         _ffGrid.Controls.Add(_ffIntro, 0, 0);
         _ffGrid.Controls.Add(_hdrTiming, 0, 1);
         _ffGrid.Controls.Add(_loop, 0, 2);
-        _ffGrid.Controls.Add(_hdrEncode, 0, 3);
-        _ffGrid.Controls.Add(_lblSize, 0, 4);
-        _ffGrid.Controls.Add(_sizeRow, 1, 4);
-        _ffGrid.Controls.Add(_lblFrameRate, 0, 5);
-        _ffGrid.Controls.Add(_frameRate, 1, 5);
-        _ffGrid.Controls.Add(_lblBitrate, 0, 6);
-        _ffGrid.Controls.Add(_bitrate, 1, 6);
-        _ffGrid.Controls.Add(_lblKeyframe, 0, 7);
-        _ffGrid.Controls.Add(_keyframe, 1, 7);
-        _ffGrid.Controls.Add(_noBFrames, 0, 8);
-        _ffGrid.Controls.Add(_hdrPublish, 0, 9);
-        _ffGrid.Controls.Add(_lblPublishTransport, 0, 10);
-        _ffGrid.Controls.Add(_publishTransport, 1, 10);
-        _ffGrid.Controls.Add(_lblFfmpegLog, 0, 11);
-        _ffGrid.Controls.Add(_ffmpegLog, 1, 11);
+        _ffGrid.Controls.Add(_hdrMotion, 0, 3);
+        _ffGrid.Controls.Add(_autoScan, 0, 4);
+        _ffGrid.Controls.Add(_lblMotionThreshold, 0, 5);
+        _ffGrid.Controls.Add(_motionThreshold, 1, 5);
+        _ffGrid.Controls.Add(_lblMinStill, 0, 6);
+        _ffGrid.Controls.Add(_minStill, 1, 6);
+        _ffGrid.Controls.Add(_lblMotionPadding, 0, 7);
+        _ffGrid.Controls.Add(_motionPadding, 1, 7);
+        _ffGrid.Controls.Add(_hdrEncode, 0, 8);
+        _ffGrid.Controls.Add(_lblSize, 0, 9);
+        _ffGrid.Controls.Add(_sizeRow, 1, 9);
+        _ffGrid.Controls.Add(_lblFrameRate, 0, 10);
+        _ffGrid.Controls.Add(_frameRate, 1, 10);
+        _ffGrid.Controls.Add(_lblBitrate, 0, 11);
+        _ffGrid.Controls.Add(_bitrate, 1, 11);
+        _ffGrid.Controls.Add(_lblKeyframe, 0, 12);
+        _ffGrid.Controls.Add(_keyframe, 1, 12);
+        _ffGrid.Controls.Add(_noBFrames, 0, 13);
+        _ffGrid.Controls.Add(_hdrPublish, 0, 14);
+        _ffGrid.Controls.Add(_lblPublishTransport, 0, 15);
+        _ffGrid.Controls.Add(_publishTransport, 1, 15);
+        _ffGrid.Controls.Add(_lblFfmpegLog, 0, 16);
+        _ffGrid.Controls.Add(_ffmpegLog, 1, 16);
         _ffGrid.SetColumnSpan(_ffIntro, 2);
         _ffGrid.SetColumnSpan(_hdrTiming, 2);
         _ffGrid.SetColumnSpan(_loop, 2);
+        _ffGrid.SetColumnSpan(_hdrMotion, 2);
+        _ffGrid.SetColumnSpan(_autoScan, 2);
         _ffGrid.SetColumnSpan(_hdrEncode, 2);
         _ffGrid.SetColumnSpan(_noBFrames, 2);
         _ffGrid.SetColumnSpan(_hdrPublish, 2);
@@ -234,6 +265,51 @@ public sealed partial class OptionsDialog
         _loop.Checked = true;
         _loop.Margin = new Padding(12, 2, 0, 2);
         _loop.Text = "Loop the video when it ends (otherwise hold the last frame)";
+
+        _hdrMotion.AutoSize = true;
+        _hdrMotion.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        _hdrMotion.Margin = new Padding(0, 12, 0, 2);
+        _hdrMotion.Text = "Motion scan (skip parts where nothing moves)";
+
+        _autoScan.AutoSize = true;
+        _autoScan.Checked = true;
+        _autoScan.Margin = new Padding(12, 2, 0, 2);
+        _autoScan.Text = "Scan new videos when they are added (videos with a skip file are not rescanned)";
+
+        _lblMotionThreshold.AutoSize = true;
+        _lblMotionThreshold.Margin = new Padding(12, 6, 10, 0);
+        _lblMotionThreshold.Text = "Movement needed (% of the picture):";
+
+        _motionThreshold.DecimalPlaces = 1;
+        _motionThreshold.Increment = 0.1M;
+        _motionThreshold.Margin = new Padding(0, 3, 0, 3);
+        _motionThreshold.Maximum = 25;
+        _motionThreshold.Minimum = 0.1M;
+        _motionThreshold.Value = 0.3M;
+        _motionThreshold.Width = 110;
+
+        _lblMinStill.AutoSize = true;
+        _lblMinStill.Margin = new Padding(12, 6, 10, 0);
+        _lblMinStill.Text = "Skip still parts longer than (seconds):";
+
+        _minStill.DecimalPlaces = 1;
+        _minStill.Increment = 0.5M;
+        _minStill.Margin = new Padding(0, 3, 0, 3);
+        _minStill.Maximum = 3600;
+        _minStill.Minimum = 1;
+        _minStill.Value = 3;
+        _minStill.Width = 110;
+
+        _lblMotionPadding.AutoSize = true;
+        _lblMotionPadding.Margin = new Padding(12, 6, 10, 0);
+        _lblMotionPadding.Text = "Keep before and after movement (seconds):";
+
+        _motionPadding.DecimalPlaces = 1;
+        _motionPadding.Increment = 0.5M;
+        _motionPadding.Margin = new Padding(0, 3, 0, 3);
+        _motionPadding.Maximum = 60;
+        _motionPadding.Value = 1;
+        _motionPadding.Width = 110;
 
 
 
@@ -474,6 +550,9 @@ public sealed partial class OptionsDialog
 
         // ================= Tooltips =================
         _tips.SetToolTip(_loop, "Replay the video from the start when it reaches the end. Off stops the camera after one pass.");
+        _tips.SetToolTip(_motionThreshold, "Lower finds smaller movement (a person far away); higher ignores small changes such as leaves or rain.");
+        _tips.SetToolTip(_minStill, "Still parts shorter than this keep playing, so short pauses in the action are not cut.");
+        _tips.SetToolTip(_motionPadding, "Time kept before movement starts and after it ends, so a car is seen arriving and leaving.");
         _tips.SetToolTip(_keyframe, "A new viewer shows nothing until the next keyframe. 0 sends one every second, so playback starts within about a second.");
         _tips.SetToolTip(_transports, "Which transports MediaMTX accepts from viewers. TCP is the most reliable.");
         _tips.SetToolTip(_viewerUser, "Set both a username and a password to require a login for viewers.");
@@ -484,7 +563,7 @@ public sealed partial class OptionsDialog
         CancelButton = _cancel;
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(640, 480);
+        ClientSize = new Size(640, 600);
         Font = new Font("Segoe UI", 9F);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;

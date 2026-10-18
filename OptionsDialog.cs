@@ -37,6 +37,10 @@ public sealed partial class OptionsDialog : Form
     private void LoadValues(StreamOptions o)
     {
         _loop.Checked = o.Loop;
+        _autoScan.Checked = o.AutoScanMotion;
+        SetValue(_motionThreshold, o.MotionThresholdPercent);
+        SetValue(_minStill, o.MinStillSeconds);
+        SetValue(_motionPadding, o.MotionPaddingSeconds);
         SetValue(_bitrate, o.BitrateKbps);
         SetValue(_keyframe, o.KeyframeInterval);
         SetValue(_width, o.Width);
@@ -60,6 +64,9 @@ public sealed partial class OptionsDialog : Form
     private static void SetValue(NumericUpDown box, int value) =>
         box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, value));
 
+    private static void SetValue(NumericUpDown box, double value) =>
+        box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, (decimal)value));
+
     private void ApplyToOptions()
     {
         CommitTyped(_bitrate);
@@ -68,9 +75,16 @@ public sealed partial class OptionsDialog : Form
         CommitTyped(_height);
         CommitTyped(_frameRate);
         CommitTyped(_readTimeout);
+        CommitTyped(_motionThreshold);
+        CommitTyped(_minStill);
+        CommitTyped(_motionPadding);
         CommitTyped(_writeTimeout);
 
         _working.Loop = _loop.Checked;
+        _working.AutoScanMotion = _autoScan.Checked;
+        _working.MotionThresholdPercent = (double)_motionThreshold.Value;
+        _working.MinStillSeconds = (double)_minStill.Value;
+        _working.MotionPaddingSeconds = (double)_motionPadding.Value;
         _working.BitrateKbps = (int)_bitrate.Value;
         _working.KeyframeInterval = (int)_keyframe.Value;
         _working.Width = (int)_width.Value;
@@ -96,7 +110,7 @@ public sealed partial class OptionsDialog : Form
     /// </summary>
     private static void CommitTyped(NumericUpDown box)
     {
-        if (decimal.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Integer | System.Globalization.NumberStyles.AllowThousands,
+        if (decimal.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Number,
                 System.Globalization.CultureInfo.CurrentCulture, out decimal typed))
         {
             box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, typed));

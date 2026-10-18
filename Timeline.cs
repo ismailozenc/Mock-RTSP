@@ -27,6 +27,9 @@ public sealed class Timeline : Control
     private readonly Dictionary<int, Bitmap> _bitmaps = new();
     private readonly List<SkipRange> _skips = new();
     private ThumbnailStrip? _strip;
+    private MotionProfile? _motion;
+    private double _motionThreshold = 0.3;
+    private double? _scanProgress;
     private double _duration;
     private double _position;
     private double _pixelsPerSecond;            // 0 until the first layout picks a zoom
@@ -79,6 +82,31 @@ public sealed class Timeline : Control
         HidePreview();
         UpdateScrollBar();
         Invalidate();
+    }
+
+    /// <summary>The motion scan, drawn as a green activity graph along the bar. Null for none.</summary>
+    public void SetMotion(MotionProfile? motion, double thresholdPercent)
+    {
+        if (ReferenceEquals(motion, _motion) && Math.Abs(thresholdPercent - _motionThreshold) < 0.001)
+            return;
+
+        _motion = motion;
+        _motionThreshold = thresholdPercent;
+        Invalidate();
+    }
+
+    /// <summary>Progress of a motion scan of this video, 0 to 1, or null when none is running.</summary>
+    public double? ScanProgress
+    {
+        get => _scanProgress;
+        set
+        {
+            if (value == _scanProgress)
+                return;
+
+            _scanProgress = value;
+            Invalidate();
+        }
     }
 
     /// <summary>The skip ranges shown. Changes from outside are ignored while the user is editing one.</summary>
@@ -261,6 +289,7 @@ public sealed class Timeline : Control
 
             DrawBar(g);
             DrawSkips(g);
+            DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));   // on top, so movement inside a skip shows too
             DrawRuler(g);
             DrawStatus(g);
 
@@ -291,6 +320,37 @@ public sealed class Timeline : Control
 
         using (var past = new SolidBrush(Color.FromArgb(20, 20, 22)))
             g.FillRectangle(past, endX, bar.Top, ViewWidth - endX, bar.Height);
+    }
+
+    /// <summary>
+    /// Movement over time as a graph rising from the bottom of the bar: dim below the threshold,
+    /// bright green above it. Full height is 5 % of the picture changing.
+    /// </summary>
+    private void DrawMotion(Graphics g, Rectangle bar, int endX)
+    {
+        if (_motion is null || _motion.Levels.Length == 0)
+            return;
+
+        int height = bar.Height - 8;
+        int bottom = bar.Bottom - 4;
+        using var quiet = new Pen(Color.FromArgb(90, 120, 200, 120));
+        using var moving = new Pen(Color.FromArgb(220, 90, 230, 90));
+
+        for (int x = Math.Max(0, TimeToX(0)); x < endX; x++)
+        {
+            // The busiest sample under this pixel column.
+            int first = (int)(XToTime(x) / _motion.IntervalSeconds);
+            int last = Math.Max(first, (int)(XToTime(x + 1) / _motion.IntervalSeconds));
+            double percent = 0;
+            for (int i = first; i <= last && i < _motion.Levels.Length; i++)
+                percent = Math.Max(percent, _motion.PercentAt(i));
+
+            if (percent <= 0)
+                continue;
+
+            int h = Math.Max(1, (int)Math.Round(Math.Min(1, percent / 5) * height));
+            g.DrawLine(percent >= _motionThreshold ? moving : quiet, x, bottom, x, bottom - h);
+        }
     }
 
     private void DrawSkips(Graphics g)
@@ -381,9 +441,11 @@ public sealed class Timeline : Control
 
     private void DrawStatus(Graphics g)
     {
-        string? text = _strip is { IsComplete: false, Error: null }
-            ? $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
-            : null;
+        string? text = _scanProgress is double progress
+            ? $"Scanning motion {progress * 100:0}%"
+            : _strip is { IsComplete: false, Error: null }
+                ? $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
+                : null;
 
         if (text is null)
             return;

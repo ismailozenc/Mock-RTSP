@@ -30,6 +30,7 @@ public sealed partial class MainForm
     private ComboBox _speed = null!;
     private Button _skipStart = null!;
     private Button _skipEnd = null!;
+    private Button _scanMotion = null!;
     private Label _lblZoom = null!;
     private Button _zoomOut = null!;
     private Button _zoomIn = null!;
@@ -86,6 +87,7 @@ public sealed partial class MainForm
         _speed = new ComboBox();
         _skipStart = new Button();
         _skipEnd = new Button();
+        _scanMotion = new Button();
         _lblZoom = new Label();
         _zoomOut = new Button();
         _zoomIn = new Button();
@@ -190,6 +192,8 @@ public sealed partial class MainForm
         _skipStart.Text = "Skip start";
         _skipEnd.Size = new Size(80, 28);
         _skipEnd.Text = "Skip end";
+        _scanMotion.Size = new Size(96, 28);
+        _scanMotion.Text = "Scan motion";
         _lblZoom.AutoSize = true;
         _lblZoom.Margin = new Padding(18, 7, 2, 0);
         _lblZoom.Text = "Timeline:";
@@ -210,7 +214,7 @@ public sealed partial class MainForm
         _playerRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _playerRow.Margin = new Padding(0, 4, 0, 2);
         _playerRow.WrapContents = true;
-        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _timeLabel, _lblSpeed, _speed, _skipStart, _skipEnd, _lblZoom, _zoomOut, _zoomIn, _zoomFit });
+        _playerRow.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _timeLabel, _lblSpeed, _speed, _skipStart, _skipEnd, _scanMotion, _lblZoom, _zoomOut, _zoomIn, _zoomFit });
 
         // Camera actions row
         _startCamera.AutoSize = true;
@@ -289,6 +293,7 @@ public sealed partial class MainForm
         _timeline.SkipRangesChanged += new EventHandler(OnTimelineSkipsChanged);
         _skipStart.Click += new EventHandler(OnSkipStartClick);
         _skipEnd.Click += new EventHandler(OnSkipEndClick);
+        _scanMotion.Click += new EventHandler(OnScanMotionClick);
         _zoomOut.Click += new EventHandler(OnZoomOutClick);
         _zoomIn.Click += new EventHandler(OnZoomInClick);
         _zoomFit.Click += new EventHandler(OnZoomFitClick);
@@ -302,7 +307,7 @@ public sealed partial class MainForm
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         Font = new Font("Segoe UI", 9F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(1040, 720);
+        ClientSize = new Size(1120, 720);
         MinimumSize = new Size(940, 620);
         StartPosition = FormStartPosition.CenterScreen;
         Text = "MockRtsp - mock RTSP camera";

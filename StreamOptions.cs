@@ -31,6 +31,12 @@ public sealed class StreamOptions
     public int FrameRate { get; set; }              // 0 = keep the source rate
     public bool NoBFrames { get; set; }
     public string PublishTransport { get; set; } = "tcp";     // "tcp" or "udp"
+
+    // ---- Motion scan: still parts of a video become skip ranges ----
+    public bool AutoScanMotion { get; set; } = true;          // scan videos that have no skip file yet
+    public double MotionThresholdPercent { get; set; } = 0.3; // share of the picture that must change
+    public double MinStillSeconds { get; set; } = 3;          // shorter still parts keep playing
+    public double MotionPaddingSeconds { get; set; } = 1;     // kept before and after movement
     public string FfmpegLogLevel { get; set; } = "warning";   // error, warning, info
 
     // ---- MediaMTX server (applies at next server start) ----
@@ -72,6 +78,12 @@ public sealed class StreamOptions
 
         if (FrameRate > 120)
             problems.Add("Frame rate can be at most 120.");
+
+        if (MotionThresholdPercent < 0.1 || MotionThresholdPercent > 25)
+            problems.Add("Movement needed must be between 0.1 and 25 % of the picture.");
+
+        if (MinStillSeconds < 1 || MotionPaddingSeconds < 0)
+            problems.Add("Still parts must be at least 1 second, and the time kept around movement cannot be negative.");
 
         if (PublishTransport is not ("tcp" or "udp"))
             problems.Add("Publish transport must be tcp or udp.");

@@ -37,6 +37,15 @@ Mark the parts the camera should jump over; they show as red blocks on the timel
 
 Skips are saved next to the video as `<video file>.skips.json` (for example `parking.mp4.skips.json`) every time you change them, and load automatically whenever that video is added as a camera, on any computer the two files are copied to. Cameras playing the same file share them. If the video's folder is not writable the skips still work, but the log says they could not be saved.
 
+### Motion scan: only the parts with movement play
+
+The first time a video is added, it is scanned for movement in the background (it plays in full until the scan is done). The still parts become skip ranges, so by default only the parts where something moves are streamed. The timeline shows the movement as a green graph: bright where it is over the threshold, dim below it.
+
+- **Scan motion** scans the selected video again, for example after changing the settings or replacing the video. If it already has skips you are asked before they are replaced.
+- **Settings > Video > Motion scan**: how much of the picture must change to count as movement (default 0.3 %), how long a still part must last before it is skipped (default 3 s), and how much to keep before and after movement (default 1 s). New settings apply at the next scan.
+- The scan is saved in the same `<video file>.skips.json`, so a video is scanned only once; its skips can be edited like any others afterwards. An automatic scan never replaces skips you made while it was running.
+- Small changes such as camera noise and compression are ignored. A video where nothing moves enough gets no skips, so it still plays.
+
 ### How a camera works
 
 Each camera runs two FFmpeg processes with the app in between:

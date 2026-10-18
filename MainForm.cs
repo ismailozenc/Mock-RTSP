@@ -50,6 +50,10 @@ public sealed partial class MainForm : Form
 
     // A skip range started with "Skip start" and waiting for "Skip end".
     private (string File, double Start)? _pendingSkip;
+
+    // Motion scans per video file: the saved result, and scans still running.
+    private readonly Dictionary<string, MotionProfile> _motion = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (MotionScan Scan, bool Automatic)> _scans = new(StringComparer.OrdinalIgnoreCase);
     private bool _updatingPlayer;       // set while code (not the user) changes the player controls
 
     public MainForm()
@@ -98,6 +102,10 @@ public sealed partial class MainForm : Form
             foreach (var strip in _thumbnails.Values)
                 strip.Dispose();
             _thumbnails.Clear();
+
+            foreach (var job in _scans.Values)
+                job.Scan.Dispose();
+            _scans.Clear();
         }
 
         base.OnFormClosing(e);
@@ -166,6 +174,7 @@ public sealed partial class MainForm : Form
                 StopServer();
             }
 
+            CheckScans();
             _cameras.Invalidate();      // refresh [ON]/[off] labels
             UpdateButtons();
         }
@@ -334,11 +343,18 @@ public sealed partial class MainForm : Form
         if (!_thumbnails.ContainsKey(source))
             _thumbnails[source] = ThumbnailStrip.Start(RequireFfmpeg(), source, camera.Source);
 
-        // Skip ranges saved next to the video come back with it.
+        // Skip ranges saved next to the video come back with it. A video seen for the first
+        // time is scanned for motion, so only the parts with movement play.
         if (!_skips.TryGetValue(source, out var skips))
         {
-            skips = LoadSkips(source, camera.Duration.TotalSeconds);
+            var saved = LoadSkips(source, camera.Duration.TotalSeconds);
+            skips = saved.Skips;
             _skips[source] = skips;
+            if (saved.Motion is not null)
+                _motion[source] = saved.Motion;
+
+            if (!saved.FileExists && _options.AutoScanMotion)
+                StartScan(source, camera.Source, automatic: true);
         }
         camera.SkipRanges = skips;
 
@@ -537,7 +553,7 @@ public sealed partial class MainForm : Form
 
         try
         {
-            SkipRangeFile.Save(file, normalized);
+            SkipRangeFile.Save(file, normalized, _motion.TryGetValue(file, out var motion) ? motion : null);
             Log(normalized.Count == 0
                 ? $"No skips left for {Path.GetFileName(file)}; removed {Path.GetFileName(SkipRangeFile.PathFor(file))}."
                 : $"Saved {normalized.Count} skip(s) to {Path.GetFileName(SkipRangeFile.PathFor(file))}: "
@@ -553,21 +569,105 @@ public sealed partial class MainForm : Form
         _timeline.SetSkipRanges(normalized);
     }
 
-    private List<SkipRange> LoadSkips(string file, double duration)
+    private SavedSkips LoadSkips(string file, double duration)
     {
         try
         {
-            var ranges = SkipRangeFile.Load(file, duration);
-            if (ranges.Count > 0)
-                Log($"Loaded {ranges.Count} skip(s) from {Path.GetFileName(SkipRangeFile.PathFor(file))}.");
-            return ranges;
+            var saved = SkipRangeFile.Load(file, duration);
+            if (saved.FileExists)
+                Log($"Loaded {saved.Skips.Count} skip(s) from {Path.GetFileName(SkipRangeFile.PathFor(file))}"
+                    + (saved.Scanned ? " (motion scanned before; click Scan motion to scan again)." : "."));
+            return saved;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             ErrorReporter.Report(ex, $"Loading skips for {file}");
             Log($"ERROR: could not read the skips saved next to the video ({ex.Message}). Playing without skips; "
-                + "the file is left as it is until you change the skips.");
-            return new List<SkipRange>();
+                + "the file is left as it is until you change the skips or scan again.");
+
+            // Report the file as existing, so an automatic scan does not overwrite it.
+            return new SavedSkips(new List<SkipRange>(), null, true);
+        }
+    }
+
+    // ---- Motion scan: still parts become skips, so only the parts with movement play ----
+
+    private void OnScanMotionClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+
+        if (_scans.ContainsKey(entry.SourceFile))
+            throw new InvalidOperationException("This video is being scanned already.");
+
+        int existing = _skips.TryGetValue(entry.SourceFile, out var list) ? list.Count : 0;
+        if (existing > 0 && MessageBox.Show(this,
+                $"Replace the {existing} skip(s) of {Path.GetFileName(entry.SourceFile)} with the result of a new motion scan?",
+                "Scan motion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        StartScan(entry.SourceFile, entry.Camera.Source, automatic: false);
+        UpdatePlayer();
+    }, "Scan motion");
+
+    private void StartScan(string file, VideoInfo source, bool automatic)
+    {
+        if (_scans.ContainsKey(file))
+            return;
+
+        _scans[file] = (MotionScan.Start(RequireFfmpeg(), file, source), automatic);
+        Log($"Scanning {Path.GetFileName(file)} for movement"
+            + (automatic ? " (first time this video is added). It plays in full until the scan is done." : "."));
+    }
+
+    /// <summary>Called by the timer: applies the result of every scan that has finished.</summary>
+    private void CheckScans()
+    {
+        foreach (var pair in _scans.Where(x => x.Value.Scan.IsComplete).ToList())
+        {
+            string file = pair.Key;
+            var job = pair.Value;
+            _scans.Remove(file);
+
+            if (job.Scan.IsCancelled)
+                continue;
+
+            if (job.Scan.Result is not { } profile)
+            {
+                Log($"ERROR: the motion scan of {Path.GetFileName(file)} failed: {job.Scan.Error}");
+                continue;
+            }
+
+            var camera = _entries.FirstOrDefault(x => string.Equals(x.SourceFile, file, StringComparison.OrdinalIgnoreCase))?.Camera;
+            if (camera is null)
+                continue;                               // the camera was removed meanwhile
+
+            double duration = camera.Duration.TotalSeconds;
+            var still = profile.StillParts(_options.MotionThresholdPercent, _options.MinStillSeconds, _options.MotionPaddingSeconds, duration);
+            _motion[file] = profile;
+
+            // An automatic scan never overwrites skips the user made while it ran.
+            var current = _skips.TryGetValue(file, out var list) ? list : Array.Empty<SkipRange>();
+            if (job.Automatic && current.Count > 0)
+            {
+                SetSkips(file, current, duration);
+                Log($"Motion scan of {Path.GetFileName(file)} done. Your skips were kept; click Scan motion to replace them with the scan.");
+                continue;
+            }
+
+            SetSkips(file, still, duration);
+
+            double skipped = still.Sum(r => r.Length);
+            if (still.Count == 0)
+                Log($"Motion scan of {Path.GetFileName(file)}: nothing to skip"
+                    + (profile.Levels.All(l => l < _options.MotionThresholdPercent * 10)
+                        ? $" (no movement over {_options.MotionThresholdPercent:0.0} % found, so the whole video plays; lower Movement needed in Settings to find smaller movement)."
+                        : " (movement throughout)."));
+            else
+                Log($"Motion scan of {Path.GetFileName(file)}: skipping {still.Count} still part(s), "
+                    + $"{FormatTime(TimeSpan.FromSeconds(skipped))} of {FormatTime(camera.Duration)}; "
+                    + $"{FormatTime(TimeSpan.FromSeconds(duration - skipped))} with movement plays.");
         }
     }
 
@@ -630,6 +730,7 @@ public sealed partial class MainForm : Form
         _zoomFit.Enabled = entry is not null;
         _skipStart.Enabled = enabled;
         _skipEnd.Enabled = enabled && _pendingSkip is not null;
+        _scanMotion.Enabled = enabled && !_scans.ContainsKey(entry!.SourceFile);
         _timeline.Enabled = enabled;
 
         if (entry is null)
@@ -650,6 +751,8 @@ public sealed partial class MainForm : Form
             _thumbnails.TryGetValue(entry.SourceFile, out var strip);
             _timeline.SetSource(strip, camera.Duration.TotalSeconds);
             _timeline.SetSkipRanges(_skips.TryGetValue(entry.SourceFile, out var skips) ? skips : Array.Empty<SkipRange>());
+            _timeline.SetMotion(_motion.TryGetValue(entry.SourceFile, out var motion) ? motion : null, _options.MotionThresholdPercent);
+            _timeline.ScanProgress = _scans.TryGetValue(entry.SourceFile, out var job) ? job.Scan.Progress : null;
             _timeline.PendingStart = _pendingSkip is { } pending
                 && string.Equals(pending.File, entry.SourceFile, StringComparison.OrdinalIgnoreCase) ? pending.Start : null;
             _timeline.Position = camera.Position.TotalSeconds;
@@ -706,6 +809,12 @@ public sealed partial class MainForm : Form
         {
             _thumbnails.Remove(entry.SourceFile);
             _skips.Remove(entry.SourceFile);
+            _motion.Remove(entry.SourceFile);
+            if (_scans.TryGetValue(entry.SourceFile, out var job))
+            {
+                job.Scan.Dispose();
+                _scans.Remove(entry.SourceFile);
+            }
             strip.Dispose();
         }
 
