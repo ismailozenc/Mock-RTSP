@@ -28,6 +28,9 @@ public sealed partial class MainForm : Form, ICameraHost
     private readonly Dictionary<string, VideoFile> _videos = new(StringComparer.OrdinalIgnoreCase);
 
     private string _currentFolder = string.Empty;
+    private string? _projectPath;                   // the project open, if any
+    private string _savedFingerprint = new ProjectFile().Fingerprint();   // the setup as last saved or opened
+    private bool _loadingOptions;
     private readonly HashSet<string> _playableFiles = new(StringComparer.OrdinalIgnoreCase);   // of the current folder
     private int _folderGeneration;                  // bumped per folder load, so late results of an old one are dropped
 
@@ -76,8 +79,30 @@ public sealed partial class MainForm : Form, ICameraHost
         if (_options.VideoFolder.Length > 0 && Directory.Exists(_options.VideoFolder))
             Safe(() => LoadFolder(_options.VideoFolder), "Video folder");
 
-        Log("Start the server, then double-click a video to add it as a camera.");
+        _loadingOptions = true;
+        _openAtStartup.Checked = _options.OpenLastProject;
+        _loadingOptions = false;
+        _savedFingerprint = CaptureProject().Fingerprint();
+        UpdateTitle();
+
+        Log("Start the server, then double-click a video to add it as a camera. Save project keeps the whole setup.");
         UpdateButtons();
+    }
+
+    protected override async void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        if (DesignMode || !_options.OpenLastProject || _options.LastProject.Length == 0)
+            return;
+
+        if (!File.Exists(_options.LastProject))
+        {
+            Log($"The last project, {_options.LastProject}, is not there any more.");
+            return;
+        }
+
+        await SafeAsync(() => OpenProjectAsync(_options.LastProject), "Open project");
     }
 
     /// <summary>
@@ -111,6 +136,12 @@ public sealed partial class MainForm : Form, ICameraHost
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (!DesignMode && !ConfirmDiscardChanges("Closing"))
+        {
+            e.Cancel = true;
+            return;
+        }
+
         if (!DesignMode)
         {
             _folderGeneration++;                        // drop any folder results still on their way
@@ -154,6 +185,32 @@ public sealed partial class MainForm : Form, ICameraHost
     private async void OnOptionsClick(object? sender, EventArgs e) => await SafeAsync(EditSettingsAsync, "Settings");
 
     private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
+
+    private async void OnOpenProjectClick(object? sender, EventArgs e) => await SafeAsync(async () =>
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Open a project",
+            Filter = ProjectFile.Filter,
+            InitialDirectory = ProjectFolder()
+        };
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            await OpenProjectAsync(dialog.FileName);
+    }, "Open project");
+
+    private void OnSaveProjectClick(object? sender, EventArgs e) => Safe(() => SaveProject(_projectPath), "Save project");
+
+    private void OnSaveProjectAsClick(object? sender, EventArgs e) => Safe(() => SaveProject(null), "Save project");
+
+    private void OnOpenAtStartupChanged(object? sender, EventArgs e)
+    {
+        if (_loadingOptions)
+            return;
+
+        _options.OpenLastProject = _openAtStartup.Checked;
+        OptionsStore.Save(_options);
+    }
 
     private void OnFilesSelectionChanged(object? sender, EventArgs e) => UpdateButtons();
 
@@ -507,7 +564,26 @@ public sealed partial class MainForm : Form, ICameraHost
         if (files.Count == 0)
             throw new InvalidOperationException("Pick a video in the list first.");
 
-        string path = CheckStreamPath(_streamPath.Text);
+        var entry = CreateCamera(CheckStreamPath(_streamPath.Text), files);
+        _streamPath.Text = NextStreamPath();
+
+        // A camera is live as soon as it is added. If FFmpeg cannot start, it stays (stopped)
+        // and the error is shown.
+        try
+        {
+            StartCamera(entry);
+        }
+        finally
+        {
+            UpdateButtons();
+        }
+    }
+
+    /// <summary>Makes a camera with its panel, stopped. Opens the videos (their saved settings, skips and motion data load).</summary>
+    private CameraEntry CreateCamera(string path, IReadOnlyList<string> files)
+    {
+        if (_server is null)
+            throw new InvalidOperationException("Start the server first.");
 
         var playlist = new List<VideoFile>();
         MockCamera camera;
@@ -546,22 +622,201 @@ public sealed partial class MainForm : Form, ICameraHost
         Log(playlist.Count == 1
             ? $"Added camera {camera.Url} playing {playlist[0].Name}."
             : $"Added camera {camera.Url} playing {playlist.Count} videos in turn: {string.Join(", ", playlist.Select(v => v.Name))}.");
-        _streamPath.Text = NextStreamPath();
+
         foreach (var video in playlist)
             UpdateFileItem(video.Path);
 
-        // A camera is live as soon as it is added. If FFmpeg cannot start, it stays (stopped)
-        // and the error is shown.
+        return entry;
+    }
+
+    // ===================================================================== projects
+
+    /// <summary>The whole setup as it is now.</summary>
+    private ProjectFile CaptureProject() => new()
+    {
+        Port = (int)_port.Value,
+        StartServer = _server is not null,
+        Settings = _options.Clone(),
+        VideoFolder = _currentFolder,
+        Cameras = _entries.Select(e => new ProjectCamera
+        {
+            StreamPath = e.StreamPath,
+            Videos = e.Playlist.Select(v => v.Path).ToList(),
+            Running = e.Camera.IsOnline,
+            Paused = e.Camera.IsPaused,
+            Speed = e.Camera.Speed,
+            Video = e.Camera.ItemIndex,
+            PositionSeconds = e.Camera.Position.TotalSeconds
+        }).ToList()
+    };
+
+    private bool HasUnsavedChanges => CaptureProject().Fingerprint() != _savedFingerprint;
+
+    /// <summary>Saves the setup to a project file; asks where when path is null. Returns false if cancelled.</summary>
+    private bool SaveProject(string? path)
+    {
+        if (path is null)
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Title = "Save the setup as a project",
+                Filter = ProjectFile.Filter,
+                DefaultExt = ProjectFile.Extension,
+                AddExtension = true,
+                InitialDirectory = ProjectFolder(),
+                FileName = _projectPath is not null ? Path.GetFileName(_projectPath) : "cameras" + ProjectFile.Extension
+            };
+
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            path = dialog.FileName;
+        }
+
+        var project = CaptureProject();
+        project.Save(path);
+
+        _projectPath = Path.GetFullPath(path);
+        _savedFingerprint = project.Fingerprint();
+        RememberProject(_projectPath);
+        UpdateTitle();
+
+        Log($"Project saved: {_projectPath} ({project.Cameras.Count} camera(s)"
+            + (project.StartServer ? $", server on port {project.Port}" : ", server stopped") + ").");
+        return true;
+    }
+
+    /// <summary>
+    /// Puts a saved setup back: settings, port, video folder, then the server and every camera
+    /// with its playlist, speed, position, pause and on/off state. Replaces what is open now.
+    /// </summary>
+    private async Task OpenProjectAsync(string path)
+    {
+        if (!ConfirmDiscardChanges("Opening a project"))
+            return;
+
+        var project = ProjectFile.Load(path);
+        string full = Path.GetFullPath(path);
+
+        StopServer();
+
+        // The project's settings, keeping what the app remembers between runs.
+        var settings = project.Settings.Clone();
+        settings.VideoFolder = _options.VideoFolder;
+        settings.RecentFolders = _options.RecentFolders;
+        settings.LastProject = _options.LastProject;
+        settings.OpenLastProject = _options.OpenLastProject;
+        _options = settings;
+        OptionsStore.Save(_options);
+
+        _port.Value = Math.Clamp(project.Port, (int)_port.Minimum, (int)_port.Maximum);
+
+        if (project.VideoFolder.Length > 0)
+        {
+            if (Directory.Exists(project.VideoFolder))
+                LoadFolder(project.VideoFolder);
+            else
+                Log($"The project's video folder, {project.VideoFolder}, is not there.");
+        }
+
+        _projectPath = full;
+        RememberProject(full);
+        Log($"Opened project {full}.");
+
+        if (project.StartServer)
+        {
+            await StartServerAsync();
+
+            foreach (var saved in project.Cameras)
+                RestoreCamera(saved);
+        }
+        else if (project.Cameras.Count > 0)
+        {
+            Log("The project was saved with the server stopped, so its cameras were not added.");
+        }
+
+        _streamPath.Text = NextStreamPath();
+        _savedFingerprint = CaptureProject().Fingerprint();
+        UpdateTitle();
+        LayoutPanels();
+        UpdateButtons();
+    }
+
+    /// <summary>Adds one camera of a project. A missing video is left out; a camera without any is skipped.</summary>
+    private void RestoreCamera(ProjectCamera saved)
+    {
         try
         {
-            camera.Start();
-            Log($"Started {camera.Url}");
+            var missing = saved.Videos.Where(v => !File.Exists(v)).ToList();
+            var files = saved.Videos.Where(File.Exists).ToList();
+
+            if (missing.Count > 0)
+                Log($"'{saved.StreamPath}': not found, left out: {string.Join(", ", missing)}");
+
+            if (files.Count == 0)
+            {
+                Log($"'{saved.StreamPath}': none of its videos are there, so it was not added.");
+                return;
+            }
+
+            var entry = CreateCamera(CheckStreamPath(saved.StreamPath), files);
+            var camera = entry.Camera;
+
+            // Where it was: the same video, unless one before it is missing now.
+            if (missing.Count == 0 && saved.Video > 0 && saved.Video < files.Count)
+                camera.PlayItem(saved.Video);
+            if (missing.Count == 0 && saved.PositionSeconds > 0)
+                camera.SeekTo(TimeSpan.FromSeconds(saved.PositionSeconds));
+
+            camera.Speed = saved.Speed;
+            if (saved.Paused)
+                camera.Pause();
+
+            if (saved.Running)
+                StartCamera(entry);
         }
-        finally
+        catch (Exception ex)
         {
-            UpdateButtons();
+            ErrorReporter.Report(ex, $"Restoring camera {saved.StreamPath}");
+            Log($"ERROR: could not add '{saved.StreamPath}' from the project: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Before the setup is replaced or the app closes: offers to save changes. Returns false
+    /// when the user cancels. Nothing is asked when nothing changed, or when there is nothing to keep.
+    /// </summary>
+    private bool ConfirmDiscardChanges(string action)
+    {
+        if (!HasUnsavedChanges || (_projectPath is null && _entries.Count == 0))
+            return true;
+
+        string question = _projectPath is null
+            ? "Save these cameras and settings as a project, so they can be opened again next time?"
+            : $"Save the changes to {Path.GetFileName(_projectPath)}?";
+
+        var answer = MessageBox.Show(this, question, action, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        return answer switch
+        {
+            DialogResult.Yes => SaveProject(_projectPath),
+            DialogResult.No => true,
+            _ => false
+        };
+    }
+
+    private void RememberProject(string path)
+    {
+        _options.LastProject = path;
+        OptionsStore.Save(_options);
+    }
+
+    private string ProjectFolder() =>
+        _projectPath is not null ? Path.GetDirectoryName(_projectPath)!
+        : _currentFolder.Length > 0 ? _currentFolder
+        : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+    private void UpdateTitle() =>
+        Text = _projectPath is null ? "MockRtsp - mock RTSP cameras" : $"MockRtsp - {Path.GetFileNameWithoutExtension(_projectPath)}";
 
     /// <summary>
     /// Changes the videos a camera plays. Videos new to the app are opened (their saved settings,
@@ -693,6 +948,9 @@ public sealed partial class MainForm : Form, ICameraHost
 
     public void StartCamera(CameraEntry entry)
     {
+        if (entry.Camera.IsOnline)
+            return;
+
         entry.Camera.Start();
         Log($"Started {entry.Camera.Url}");
     }
@@ -1046,6 +1304,9 @@ public sealed partial class MainForm : Form, ICameraHost
 
         _port.Enabled = !serverUp && !_busy;
         _optionsButton.Enabled = !_busy;
+        _openProject.Enabled = !_busy;
+        _saveProject.Enabled = !_busy;
+        _saveProjectAs.Enabled = !_busy;
         _startServer.Enabled = !serverUp && !_busy && _mediaMtxExe is not null;
         _stopServer.Enabled = serverUp && !_busy;
         _addCamera.Enabled = serverUp && !_busy && _files.SelectedItems.Count > 0;

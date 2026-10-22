@@ -19,6 +19,10 @@ public sealed partial class MainForm
     private Button _startServer = null!;
     private Button _stopServer = null!;
     private Button _optionsButton = null!;
+    private Button _openProject = null!;
+    private Button _saveProject = null!;
+    private Button _saveProjectAs = null!;
+    private CheckBox _openAtStartup = null!;
     private FlowLayoutPanel _folderRow = null!;
     private Label _lblFolder = null!;
     private ComboBox _folder = null!;
@@ -69,6 +73,10 @@ public sealed partial class MainForm
         _startServer = new Button();
         _stopServer = new Button();
         _optionsButton = new Button();
+        _openProject = new Button();
+        _saveProject = new Button();
+        _saveProjectAs = new Button();
+        _openAtStartup = new CheckBox();
         _folderRow = new FlowLayoutPanel();
         _lblFolder = new Label();
         _folder = new ComboBox();
@@ -132,11 +140,22 @@ public sealed partial class MainForm
         _optionsButton.Margin = new Padding(14, 3, 3, 3);
         _optionsButton.Text = "Settings (defaults and server)...";
 
+        _openProject.AutoSize = true;
+        _openProject.Margin = new Padding(24, 3, 3, 3);
+        _openProject.Text = "Open project...";
+        _saveProject.AutoSize = true;
+        _saveProject.Text = "Save project";
+        _saveProjectAs.AutoSize = true;
+        _saveProjectAs.Text = "Save project as...";
+        _openAtStartup.AutoSize = true;
+        _openAtStartup.Margin = new Padding(10, 7, 3, 3);
+        _openAtStartup.Text = "Reopen the last project at startup";
+
         _serverRow.AutoSize = true;
         _serverRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _serverRow.Margin = new Padding(0, 0, 0, 2);
         _serverRow.WrapContents = true;
-        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton });
+        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton, _openProject, _saveProject, _saveProjectAs, _openAtStartup });
 
         // ================= Folder row =================
         _lblFolder.AutoSize = true;
@@ -279,6 +298,10 @@ public sealed partial class MainForm
         _startServer.Click += new EventHandler(OnStartServerClick);
         _stopServer.Click += new EventHandler(OnStopServerClick);
         _optionsButton.Click += new EventHandler(OnOptionsClick);
+        _openProject.Click += new EventHandler(OnOpenProjectClick);
+        _saveProject.Click += new EventHandler(OnSaveProjectClick);
+        _saveProjectAs.Click += new EventHandler(OnSaveProjectAsClick);
+        _openAtStartup.CheckedChanged += new EventHandler(OnOpenAtStartupChanged);
         _folder.SelectionChangeCommitted += new EventHandler(OnFolderPicked);
         _folder.KeyDown += new KeyEventHandler(OnFolderKeyDown);
         _browseFolder.Click += new EventHandler(OnBrowseFolderClick);

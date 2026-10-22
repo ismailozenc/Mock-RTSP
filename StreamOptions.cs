@@ -52,6 +52,8 @@ public sealed class StreamOptions
     // ---- Remembered between runs ----
     public string VideoFolder { get; set; } = string.Empty;
     public string[] RecentFolders { get; set; } = Array.Empty<string>();
+    public string LastProject { get; set; } = string.Empty;   // reopened at startup when OpenLastProject is on
+    public bool OpenLastProject { get; set; } = true;
 
     public StreamOptions Clone() => (StreamOptions)MemberwiseClone();
 

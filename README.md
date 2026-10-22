@@ -25,10 +25,16 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 4. Every camera gets its own panel on the right, with everything for that camera, so nothing needs selecting first:
    - **Start/Stop**, **Open in VLC**, **Playlist...**, **Video settings...**, **Scan motion**, **Outage** with **Simulate**, and **Remove**.
    - **Rewind** (back to the start of the video; pressed again at the start, to the video before), **« 10 s**, **Pause/Play**, **10 s »**, **Speed** (0.25x to 4x), **Skip start**/**Skip end**, and **-**, **+**, **Fit** to zoom its timeline. A camera with several videos also has a list to pick the video and **Next**.
-   - Its own **timeline** of the video playing now: hover for a preview frame, click or drag to jump, drag the edges of the red skip blocks, Shift + drag to add one, right-click to delete. Ctrl + wheel zooms. Under the green movement graph a strip shows what plays (green) and what is skipped (red).
+   - Its own **timeline** of the video playing now: hover for a preview frame, click or drag to jump, drag the edges of the red skip blocks, Shift + drag to add one, right-click to delete. Ctrl + wheel zooms. The graph shows how much of the picture moves: faint below the threshold (dashed line), solid green above it, and as a red hatched grid in skipped parts, so you can see the movement that is cut. Under it a strip shows what plays (green) and what is skipped (red).
    Viewers stay connected through pause, seek and speed changes.
 
 Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
+
+### Projects: keep the whole setup
+
+**Save project** keeps everything needed to get back to where you are: the port, the settings (defaults and server), the video folder, and every camera with its stream path, playlist, speed, position, pause and whether it is on. **Open project...** puts it all back: the server starts and the cameras are added. With **Reopen the last project at startup** ticked, the app does that by itself when it starts.
+
+Projects are `.mockrtsp-project` files. Videos inside the project's folder are saved relative to it, so the folder can be moved or copied to another computer. Each video's own settings, skips and motion data are in the files next to the video, so they come along too. A video that is missing when the project opens is left out and logged. Closing the app, or opening another project, asks first if the setup has changed since it was saved.
 
 ### Playlists
 

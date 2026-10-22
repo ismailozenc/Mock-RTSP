@@ -28,6 +28,7 @@ public sealed class Timeline : Control
     private ThumbnailStrip? _strip;
     private MotionProfile? _motion;
     private double _motionThreshold = 0.3;
+    private double _motionScale = 1;            // percent of the picture changing at full graph height
     private double? _scanProgress;
     private double _duration;
     private double _position;
@@ -91,6 +92,17 @@ public sealed class Timeline : Control
 
         _motion = motion;
         _motionThreshold = thresholdPercent;
+
+        // Full height is the busiest moment of the video (at least 3x the threshold), so quiet
+        // footage still gives a readable graph.
+        double peak = 0;
+        if (motion is not null)
+        {
+            for (int i = 0; i < motion.Levels.Length; i++)
+                peak = Math.Max(peak, motion.PercentAt(i));
+        }
+
+        _motionScale = Math.Max(peak, thresholdPercent * 3);
         Invalidate();
     }
 
@@ -294,8 +306,9 @@ public sealed class Timeline : Control
             }
 
             DrawBar(g);
-            DrawSkips(g);
-            DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));   // on top, so movement inside a skip shows too
+            DrawSkipAreas(g);
+            DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));
+            DrawSkipEdges(g);
             DrawPlayStrip(g);
             DrawRuler(g);
             DrawStatus(g);
@@ -330,8 +343,10 @@ public sealed class Timeline : Control
     }
 
     /// <summary>
-    /// Movement over time as a graph rising from the bottom of the bar: dim below the threshold,
-    /// bright green above it. Full height is 5 % of the picture changing.
+    /// Movement over time as a graph rising from the bottom of the bar. Where the video plays:
+    /// faint green below the threshold, solid green above it. Where it is skipped: a red hatched
+    /// grid, so the movement that is cut is still visible. Full height is the video's busiest
+    /// moment; a dashed line marks the threshold.
     /// </summary>
     private void DrawMotion(Graphics g, Rectangle bar, int endX)
     {
@@ -340,13 +355,18 @@ public sealed class Timeline : Control
 
         int height = bar.Height - 8;
         int bottom = bar.Bottom - 4;
-        using var quiet = new Pen(Color.FromArgb(90, 120, 200, 120));
-        using var moving = new Pen(Color.FromArgb(220, 90, 230, 90));
+        bool skipsApply = MockRtsp.SkipRanges.LeavesSomethingToPlay(_skips, _duration);
 
+        using var quiet = new SolidBrush(Color.FromArgb(110, 120, 200, 120));
+        using var moving = new SolidBrush(Color.FromArgb(70, 200, 80));
+        using var cut = new HatchBrush(HatchStyle.Cross, Color.FromArgb(255, 110, 110), Color.FromArgb(150, 35, 35));
+
+        // The hatch lines up across columns because the pattern is anchored to the control, not the column.
         for (int x = Math.Max(0, TimeToX(0)); x < endX; x++)
         {
             // The busiest sample under this pixel column.
-            int first = (int)(XToTime(x) / _motion.IntervalSeconds);
+            double from = XToTime(x);
+            int first = (int)(from / _motion.IntervalSeconds);
             int last = Math.Max(first, (int)(XToTime(x + 1) / _motion.IntervalSeconds));
             double percent = 0;
             for (int i = first; i <= last && i < _motion.Levels.Length; i++)
@@ -355,9 +375,16 @@ public sealed class Timeline : Control
             if (percent <= 0)
                 continue;
 
-            int h = Math.Max(1, (int)Math.Round(Math.Min(1, percent / 5) * height));
-            g.DrawLine(percent >= _motionThreshold ? moving : quiet, x, bottom, x, bottom - h);
+            int h = Math.Max(2, (int)Math.Round(Math.Min(1, percent / _motionScale) * height));
+            bool skipped = skipsApply && RangeAt(from + 0.5 / Math.Max(_pixelsPerSecond, 0.0001)) >= 0;
+
+            Brush brush = skipped ? cut : percent >= _motionThreshold ? moving : quiet;
+            g.FillRectangle(brush, x, bottom - h, 1, h);
         }
+
+        int y = bottom - (int)Math.Round(Math.Min(1, _motionThreshold / _motionScale) * height);
+        using var line = new Pen(Color.FromArgb(150, 230, 230, 160)) { DashStyle = DashStyle.Dash };
+        g.DrawLine(line, Math.Max(0, TimeToX(0)), y, endX, y);
     }
 
     /// <summary>
@@ -392,11 +419,32 @@ public sealed class Timeline : Control
         }
     }
 
-    private void DrawSkips(Graphics g)
+    /// <summary>The skipped parts: a dark red background, under the motion graph, with their length.</summary>
+    private void DrawSkipAreas(Graphics g)
     {
         var bar = BarArea;
-        using var fill = new SolidBrush(Color.FromArgb(170, 190, 38, 38));
-        using var hatch = new HatchBrush(HatchStyle.BackwardDiagonal, Color.FromArgb(60, 255, 255, 255), Color.Transparent);
+        using var fill = new SolidBrush(Color.FromArgb(70, 50, 52));
+
+        foreach (var range in _skips)
+        {
+            int x1 = TimeToX(range.Start);
+            int x2 = TimeToX(range.End);
+            if (x2 < 0 || x1 > ViewWidth)
+                continue;
+
+            var rect = new Rectangle(x1, bar.Top + 2, Math.Max(1, x2 - x1), bar.Height - 4);
+            g.FillRectangle(fill, rect);
+
+            if (rect.Width > 56)
+                TextRenderer.DrawText(g, $"skip {range.Length:0.0} s", Font, new Rectangle(rect.Left + 6, rect.Top + 1, rect.Width - 10, Font.Height + 2),
+                    Color.FromArgb(255, 150, 150), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    /// <summary>The handles on each skipped part, and a part being drawn with Shift + drag.</summary>
+    private void DrawSkipEdges(Graphics g)
+    {
+        var bar = BarArea;
         using var edge = new SolidBrush(Color.FromArgb(235, 235, 235));
         using var activeEdge = new SolidBrush(Color.Gold);
 
@@ -410,13 +458,6 @@ public sealed class Timeline : Control
                 continue;
 
             var rect = new Rectangle(x1, bar.Top + 2, Math.Max(1, x2 - x1), bar.Height - 4);
-            g.FillRectangle(fill, rect);
-            g.FillRectangle(hatch, rect);
-
-            if (rect.Width > 46)
-                TextRenderer.DrawText(g, $"skip {_skips[i].Length:0.0} s", Font, rect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-
             bool startActive = (_drag == DragMode.Edge && _edgeRange == i && _edgeIsStart) || (hoverRange == i && hoverIsStart);
             bool endActive = (_drag == DragMode.Edge && _edgeRange == i && !_edgeIsStart) || (hoverRange == i && !hoverIsStart);
             DrawEdge(g, x1, rect, startActive ? activeEdge : edge);
@@ -427,7 +468,7 @@ public sealed class Timeline : Control
         {
             int x1 = TimeToX(Math.Min(_createAnchor, _dragSeconds));
             int x2 = TimeToX(Math.Max(_createAnchor, _dragSeconds));
-            using var creating = new SolidBrush(Color.FromArgb(150, 255, 140, 0));
+            using var creating = new SolidBrush(Color.FromArgb(120, 255, 140, 0));
             g.FillRectangle(creating, x1, bar.Top + 2, Math.Max(1, x2 - x1), bar.Height - 4);
         }
     }
