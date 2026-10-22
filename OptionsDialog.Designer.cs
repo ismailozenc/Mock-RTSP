@@ -187,7 +187,7 @@ public sealed partial class OptionsDialog
         // ================= FFmpeg tab =================
         _tabFfmpeg.AutoScroll = true;
         _tabFfmpeg.Padding = new Padding(10);
-        _tabFfmpeg.Text = "Video";
+        _tabFfmpeg.Text = "Defaults for videos";
         _tabFfmpeg.UseVisualStyleBackColor = true;
         _tabFfmpeg.Controls.Add(_ffGrid);
 
@@ -254,7 +254,7 @@ public sealed partial class OptionsDialog
         _ffIntro.ForeColor = SystemColors.GrayText;
         _ffIntro.Margin = new Padding(0, 0, 0, 4);
         _ffIntro.MaximumSize = new Size(590, 0);
-        _ffIntro.Text = "Applies to every camera. Running cameras restart with the new settings (position, pause and speed are kept), and VLC windows opened from this app reopen. Pause, rewind and forward are on the main window and do not disconnect viewers.";
+        _ffIntro.Text = "Used by every video that has no settings of its own (give a video its own with Video settings on its camera). Cameras restart with new settings, keeping position, pause and speed. New motion settings pick skips again from saved scans, without scanning again.";
 
         _hdrTiming.AutoSize = true;
         _hdrTiming.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -274,7 +274,7 @@ public sealed partial class OptionsDialog
         _autoScan.AutoSize = true;
         _autoScan.Checked = true;
         _autoScan.Margin = new Padding(12, 2, 0, 2);
-        _autoScan.Text = "Scan new videos when they are added (videos with a skip file are not rescanned)";
+        _autoScan.Text = "Scan a video for motion the first time it is used (videos with saved data are not rescanned)";
 
         _lblMotionThreshold.AutoSize = true;
         _lblMotionThreshold.Margin = new Padding(12, 6, 10, 0);

@@ -20,31 +20,37 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 ## Using the app
 
 1. Click **Start server**.
-2. Enter a stream path such as `Streaming/Channels/101` and choose a video file to loop, then click **Add camera**.
-3. The camera starts as soon as it is added. Use **Stop** and **Start** to take it off and back on line. Point your viewer at the URL shown in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
-4. Select a camera and click **Open in VLC** to watch it. The button is enabled while the camera is running. VLC is found in a `vlc` folder next to `MockRtsp.exe`, or in its normal install folder.
-5. Use the player row and the timeline under the camera list to control the selected camera: **Pause**/**Play**, **« 10 s** and **10 s »**, and a **Speed** from 0.25x to 4x. Hover over the timeline to see a preview frame of that moment. Click or drag on it to jump there, scroll with the mouse wheel or the scrollbar, and zoom with Ctrl + wheel or the **-**, **+** and **Whole** buttons. While playing, it follows the playhead. Viewers stay connected through all of these and simply see the picture freeze, jump or speed up.
-6. Click **Settings...** to change resolution, frame rate, bitrate and the other video settings. Saving applies them to every camera: running cameras restart with the new settings (keeping position, pause and speed), and VLC windows opened from the app reopen on the new stream. Width and height must be even, for example 1280 x 720.
-7. Use **Simulate outage** to drop the stream for a set number of seconds and test reconnect behaviour. Like a real camera, it comes back showing "now": the video has moved on by the outage time.
+2. Choose your **Video folder** (Browse, or pick a recent one). The list shows the playable videos in it with their length, picture size, skips and which cameras use them; other files are left out.
+3. **Double-click a video** (or select it and click **Add camera**) to add it as a camera. The stream path is filled in for you (Streaming/Channels/101, 201, 301 and so on) and can be changed first. The same video can be added more than once.
+4. Every camera gets its own panel on the right, with everything for that camera, so nothing needs selecting first:
+   - **Start/Stop**, **Open in VLC**, **Video settings...**, **Scan motion**, **Outage** with **Simulate**, and **Remove**.
+   - **« 10 s**, **Pause/Play**, **10 s »**, **Speed** (0.25x to 4x), **Skip start**/**Skip end**, and **-**, **+**, **Fit** to zoom its timeline.
+   - Its own **timeline**: hover for a preview frame, click or drag to jump, drag the edges of the red skip blocks, Shift + drag to add one, right-click to delete. Ctrl + wheel zooms.
+   Viewers stay connected through pause, seek and speed changes.
 
-### Skipping parts of a video
+Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 
-Mark the parts the camera should jump over; they show as red blocks on the timeline and viewers see a clean cut.
+### Settings: defaults, and per video
 
-- **Skip start** at the playhead, then move to where it should end and click **Skip end**. Or hold **Shift** and drag across the timeline. Or right-click and choose **Add a 5 s skip**.
-- **Drag the white edge** of a red block to move where it starts or ends. The preview shows the exact frame at the edge. Dragging an edge into a neighbouring block joins the two.
-- **Right-click a block** to delete it, or **Clear all skips**.
+- **Settings (defaults and server)...** holds the defaults used by every video without settings of its own, plus the server settings.
+- **Video settings...** on a camera gives that video its own settings: resolution, frame rate, bitrate, keyframes, looping and the motion scan settings. **Use defaults** in that dialog goes back to the defaults. Cameras playing the video restart with the new settings, keeping position, pause and speed.
 
-Skips are saved next to the video as `<video file>.skips.json` (for example `parking.mp4.skips.json`) every time you change them, and load automatically whenever that video is added as a camera, on any computer the two files are copied to. Cameras playing the same file share them. If the video's folder is not writable the skips still work, but the log says they could not be saved.
+### Saved next to each video
 
-### Motion scan: only the parts with movement play
+Everything about a video is kept in a file next to it, `<video file>.mockrtsp.json` (for example `parking.mp4.mockrtsp.json`), saved whenever it changes and loaded whenever the video is used again, on any computer the two files are copied to:
 
-The first time a video is added, it is scanned for movement in the background (it plays in full until the scan is done). The still parts become skip ranges, so by default only the parts where something moves are streamed. The timeline shows the movement as a green graph: bright where it is over the threshold, dim below it.
+- its own settings, if it has any,
+- its skip ranges,
+- its motion data: how much of the picture moves, 5 times a second, from the motion scan.
 
-- **Scan motion** scans the selected video again, for example after changing the settings or replacing the video. If it already has skips you are asked before they are replaced.
-- **Settings > Video > Motion scan**: how much of the picture must change to count as movement (default 0.3 %), how long a still part must last before it is skipped (default 3 s), and how much to keep before and after movement (default 1 s). New settings apply at the next scan.
-- The scan is saved in the same `<video file>.skips.json`, so a video is scanned only once; its skips can be edited like any others afterwards. An automatic scan never replaces skips you made while it was running.
-- Small changes such as camera noise and compression are ignored. A video where nothing moves enough gets no skips, so it still plays.
+Because the motion data is kept, changing the motion settings (for the video or the defaults) picks the skips again straight away, without scanning again. If you edited the skips by hand you are asked first. Files from the previous version (`<video file>.skips.json`) are read and replaced by the new file on the first change.
+
+### Skips and motion scan
+
+- The first time a video is used it is scanned for movement in the background (it plays in full until then). Still parts become skip ranges, so by default only the parts with movement are streamed. The timeline shows the movement as a green graph: bright where it is over the threshold.
+- **Scan motion** on a camera scans its video again, for example after replacing the file; you are asked before existing skips are replaced. An automatic scan never replaces skips you made while it ran.
+- Motion settings: how much of the picture must change (default 0.3 %), how long a still part must last to be skipped (default 3 s), and how much to keep around movement (default 1 s). Small changes such as camera noise are ignored; a video where nothing moves enough gets no skips and plays in full.
+- Add skips with **Skip start**/**Skip end** at the playhead, Shift + drag on the timeline, or right-click > **Add a 5 s skip**. Drag a red block's white edge to move it; dragging into a neighbouring block joins them. Viewers see a clean cut where a skip is.
 
 ### How a camera works
 
@@ -62,7 +68,7 @@ Changing settings disconnects anyone watching, just as a real camera does when i
 
 Settings are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords, as plain text) and loaded at startup. Server settings (transports, timeouts, logins, log level) apply after you stop and start the server. Logins can only use letters, digits and `! $ ( ) * + . ; < = > [ ] ^ _ - @ #`.
 
-Video files you add as cameras are remembered in the dropdown next to **Video file**, up to 10 files, in `%APPDATA%\MockRtsp\recent-files.txt`.
+The last 10 video folders are remembered in the dropdown next to **Video folder**, together with the other settings.
 
 When the server starts, any leftover `mediamtx.exe` from an earlier run of the same folder is stopped first.
 

@@ -1,33 +1,16 @@
-using System.Diagnostics;
-
 namespace MockRtsp;
 
-public sealed partial class MainForm : Form
+/// <summary>
+/// The main window: the server, the video folder with its list of playable videos, and one
+/// panel per camera. The layout lives in MainForm.Designer.cs.
+/// </summary>
+public sealed partial class MainForm : Form, ICameraHost
 {
-    private sealed class CameraEntry
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        public CameraEntry(string streamPath, string sourceFile, MockCamera camera)
-        {
-            StreamPath = streamPath;
-            SourceFile = sourceFile;
-            Camera = camera;
-        }
-
-        public string StreamPath { get; }
-        public string SourceFile { get; }
-        public MockCamera Camera { get; }
-
-        /// <summary>The VLC window opened for this camera, if any. Reopened after a settings change.</summary>
-        public Process? Vlc { get; set; }
-
-        public override string ToString()
-        {
-            string state = !Camera.IsOnline ? "[off] " : Camera.IsPaused ? "[ON]  paused  " : "[ON]  ";
-            string speed = Camera.Speed == 1.0 ? string.Empty : $"  {Camera.Speed:0.##}x";
-            return $"{state}{StreamPath}    ({Path.GetFileName(SourceFile)})    "
-                   + $"{FormatTime(Camera.Position)} / {FormatTime(Camera.Duration)}{speed}";
-        }
-    }
+        ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".ts", ".mts", ".m2ts", ".flv", ".wmv", ".webm",
+        ".h264", ".264", ".h265", ".265", ".hevc"
+    };
 
     // Found in the "mediamtx" and "ffmpeg" folders next to the program when the form loads. Null if missing.
     private string? _mediaMtxExe;
@@ -35,36 +18,34 @@ public sealed partial class MainForm : Form
 
     private StreamOptions _options = new();         // Saved in options.json. Loaded in OnLoad.
     private StreamOptions? _serverOptions;          // What the running server was started with.
-    private readonly List<CameraEntry> _entries = new();
     private MediaMtxServer? _server;
     private bool _busy;
 
-    // Player row state.
-    private static readonly double[] Speeds = { 0.25, 0.5, 1.0, 2.0, 4.0 };     // matches the _speed items
+    private readonly List<CameraEntry> _entries = new();
+    private readonly Dictionary<CameraEntry, CameraPanel> _panels = new();
 
-    // Thumbnails per video file, shared by cameras that play the same file. Made in the background.
-    private readonly Dictionary<string, ThumbnailStrip> _thumbnails = new(StringComparer.OrdinalIgnoreCase);
+    // Videos in use, by full path. Cameras playing the same file share one.
+    private readonly Dictionary<string, VideoFile> _videos = new(StringComparer.OrdinalIgnoreCase);
 
-    // Skip ranges per video file, shared by cameras that play the same file and saved next to it.
-    private readonly Dictionary<string, IReadOnlyList<SkipRange>> _skips = new(StringComparer.OrdinalIgnoreCase);
-
-    // A skip range started with "Skip start" and waiting for "Skip end".
-    private (string File, double Start)? _pendingSkip;
-
-    // Motion scans per video file: the saved result, and scans still running.
-    private readonly Dictionary<string, MotionProfile> _motion = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, (MotionScan Scan, bool Automatic)> _scans = new(StringComparer.OrdinalIgnoreCase);
-    private bool _updatingPlayer;       // set while code (not the user) changes the player controls
+    private string _currentFolder = string.Empty;
+    private int _folderGeneration;                  // bumped per folder load, so late results of an old one are dropped
 
     public MainForm()
     {
         InitializeComponent();
-
-        // Owner-drawn rows do not scale with DPI by themselves, so size them from the actual font.
-        _cameras.ItemHeight = _cameras.Font.Height + 6;
     }
 
-    private CameraEntry? SelectedEntry => _cameras.SelectedItem as CameraEntry;
+    // ===================================================================== ICameraHost
+
+    public bool Busy => _busy;
+
+    public StreamOptions Defaults => _options;
+
+    public void Run(Action action, string context) => Safe(action, context);
+
+    public Task RunAsync(Func<Task> action, string context) => SafeAsync(action, context);
+
+    // ===================================================================== start and close
 
     protected override void OnLoad(EventArgs e)
     {
@@ -80,8 +61,8 @@ public sealed partial class MainForm : Form
         _mediaMtxExe = Toolchain.Find(Toolchain.MediaMtxFolder, "mediamtx.exe");
         _ffmpegExe = Toolchain.Find(Toolchain.FfmpegFolder, "ffmpeg.exe");
 
+        SetSplitters();
         _timer.Start();
-        UpdateButtons();
 
         Log(_mediaMtxExe is not null
             ? $"MediaMTX: {_mediaMtxExe}"
@@ -89,79 +70,38 @@ public sealed partial class MainForm : Form
         Log(_ffmpegExe is not null
             ? $"FFmpeg: {_ffmpegExe}"
             : $"FFmpeg not found. Put ffmpeg.exe in the '{Toolchain.FfmpegFolder}' folder next to MockRtsp.exe.");
-        RefreshRecentFiles();
-        Log("Start the MediaMTX server, then add cameras.");
+
+        RefreshFolderList();
+        if (_options.VideoFolder.Length > 0 && Directory.Exists(_options.VideoFolder))
+            Safe(() => LoadFolder(_options.VideoFolder), "Video folder");
+
+        Log("Start the server, then double-click a video to add it as a camera.");
+        UpdateButtons();
+    }
+
+    /// <summary>Videos list about half the width; the log a few lines high.</summary>
+    private void SetSplitters()
+    {
+        try
+        {
+            _content.SplitterDistance = Math.Max(_content.Panel1MinSize, Math.Min(610, _content.Width * 2 / 5));
+            _split.SplitterDistance = Math.Max(_split.Panel1MinSize, _split.Height - Math.Max(120, _split.Height / 6));
+        }
+        catch (InvalidOperationException)
+        {
+            // The window is too small for these sizes; keep the defaults.
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!DesignMode)
         {
+            _folderGeneration++;                        // drop any folder results still on their way
             Safe(StopServer, "Shutdown");
-
-            foreach (var strip in _thumbnails.Values)
-                strip.Dispose();
-            _thumbnails.Clear();
-
-            foreach (var job in _scans.Values)
-                job.Scan.Dispose();
-            _scans.Clear();
         }
 
         base.OnFormClosing(e);
-    }
-
-    // ---- Event handlers (wired in MainForm.Designer.cs) ----
-
-    private void OnBrowseVideoClick(object? sender, EventArgs e) => Safe(BrowseVideo, "Browse for video");
-
-    private async void OnStartServerClick(object? sender, EventArgs e) =>
-        await SafeAsync(StartServerAsync, "Start server");
-
-    private void OnStopServerClick(object? sender, EventArgs e) => Safe(StopServer, "Stop server");
-
-    private async void OnOptionsClick(object? sender, EventArgs e) =>
-        await SafeAsync(EditSettingsAsync, "Settings");
-
-    private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
-
-    private async void OnOpenVlcClick(object? sender, EventArgs e) =>
-        await SafeAsync(OpenInVlcAsync, "Open in VLC");
-
-    private void OnStartCameraClick(object? sender, EventArgs e) => Safe(StartSelectedCamera, "Start camera");
-
-    private void OnStopCameraClick(object? sender, EventArgs e) => Safe(StopSelectedCamera, "Stop camera");
-
-    private void OnRemoveCameraClick(object? sender, EventArgs e) => Safe(RemoveSelectedCamera, "Remove camera");
-
-    private async void OnOutageClick(object? sender, EventArgs e) =>
-        await SafeAsync(SimulateOutageAsync, "Simulate outage");
-
-    private void OnCamerasSelectedIndexChanged(object? sender, EventArgs e) => UpdateButtons();
-
-    /// <summary>
-    /// Draws each camera row from its current state. A normal ListBox keeps the text it had
-    /// when the item was added, so the [ON]/[off] label would never change.
-    /// </summary>
-    private void OnCamerasDrawItem(object? sender, DrawItemEventArgs e)
-    {
-        try
-        {
-            e.DrawBackground();
-
-            if (e.Index >= 0 && e.Index < _cameras.Items.Count)
-            {
-                string text = _cameras.Items[e.Index]?.ToString() ?? string.Empty;
-                TextRenderer.DrawText(e.Graphics, text, e.Font ?? _cameras.Font, e.Bounds, e.ForeColor,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            }
-
-            e.DrawFocusRectangle();
-        }
-        catch (Exception ex)
-        {
-            ErrorReporter.Report(ex, "Drawing camera list");
-        }
     }
 
     private void OnTimerTick(object? sender, EventArgs e)
@@ -170,12 +110,17 @@ public sealed partial class MainForm : Form
         {
             if (_server is not null && !_server.IsRunning)
             {
-                Log("MediaMTX stopped unexpectedly. All cameras were stopped.");
+                Log("MediaMTX stopped unexpectedly. All cameras were removed.");
                 StopServer();
             }
 
-            CheckScans();
-            _cameras.Invalidate();      // refresh [ON]/[off] labels
+            foreach (var video in _videos.Values.ToList())
+                video.Poll(_options);                   // applies finished motion scans
+
+            foreach (var panel in _panels.Values)
+                panel.UpdateView();
+
+            LayoutPanels();
             UpdateButtons();
         }
         catch (Exception ex)
@@ -184,7 +129,48 @@ public sealed partial class MainForm : Form
         }
     }
 
-    // ---- Error handling wrappers: every UI action goes through one of these ----
+    // ===================================================================== event handlers
+
+    private async void OnStartServerClick(object? sender, EventArgs e) => await SafeAsync(StartServerAsync, "Start server");
+
+    private void OnStopServerClick(object? sender, EventArgs e) => Safe(StopServer, "Stop server");
+
+    private async void OnOptionsClick(object? sender, EventArgs e) => await SafeAsync(EditSettingsAsync, "Settings");
+
+    private void OnAddCameraClick(object? sender, EventArgs e) => Safe(AddCamera, "Add camera");
+
+    private void OnFilesSelectionChanged(object? sender, EventArgs e) => UpdateButtons();
+
+    private void OnCamerasResize(object? sender, EventArgs e) => LayoutPanels();
+
+    private void OnFolderPicked(object? sender, EventArgs e) =>
+        Safe(() => LoadFolder(_folder.SelectedItem?.ToString() ?? _folder.Text), "Video folder");
+
+    private void OnFolderKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Enter)
+            return;
+
+        e.SuppressKeyPress = true;
+        Safe(() => LoadFolder(_folder.Text), "Video folder");
+    }
+
+    private void OnBrowseFolderClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Choose the folder with your camera videos",
+            SelectedPath = Directory.Exists(_currentFolder) ? _currentFolder : string.Empty
+        };
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            LoadFolder(dialog.SelectedPath);
+    }, "Video folder");
+
+    private void OnRefreshFolderClick(object? sender, EventArgs e) =>
+        Safe(() => LoadFolder(_currentFolder.Length > 0 ? _currentFolder : _folder.Text), "Video folder");
+
+    // ===================================================================== error handling
 
     private void Safe(Action action, string context)
     {
@@ -217,8 +203,6 @@ public sealed partial class MainForm : Form
         MessageBox.Show(this, ex.Message, context, MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
-    // ---- Tool checks ----
-
     private string RequireMediaMtx()
     {
         if (_mediaMtxExe is null || !File.Exists(_mediaMtxExe))
@@ -237,19 +221,208 @@ public sealed partial class MainForm : Form
         return _ffmpegExe;
     }
 
-    // ---- Actions ----
+    // ===================================================================== video folder
 
-    private void BrowseVideo()
+    /// <summary>Lists the video files of a folder, then checks each in the background and keeps the playable ones.</summary>
+    private void LoadFolder(string folder)
     {
-        using var dialog = new OpenFileDialog
-        {
-            Title = "Choose a video to loop",
-            Filter = "Video (*.mp4;*.mkv;*.ts;*.h264;*.h265)|*.mp4;*.mkv;*.ts;*.h264;*.h265|All files (*.*)|*.*"
-        };
+        folder = folder.Trim();
+        if (folder.Length == 0)
+            return;
 
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            _sourceFile.Text = dialog.FileName;
+        if (!Directory.Exists(folder))
+            throw new DirectoryNotFoundException($"The folder '{folder}' does not exist.");
+
+        folder = Path.GetFullPath(folder);
+        _currentFolder = folder;
+        int generation = ++_folderGeneration;
+        RememberFolder(folder);
+
+        var files = Directory.EnumerateFiles(folder)
+            .Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _files.BeginUpdate();
+        try
+        {
+            _files.Items.Clear();
+            foreach (var file in files)
+            {
+                var item = new ListViewItem(new[] { Path.GetFileName(file), "...", "...", "checking", string.Empty })
+                {
+                    Tag = file,
+                    ForeColor = SystemColors.GrayText
+                };
+                _files.Items.Add(item);
+                UpdateCameraColumn(item);
+            }
+        }
+        finally
+        {
+            _files.EndUpdate();
+        }
+
+        _folderInfo.Text = files.Count == 0 ? "No video files in this folder." : $"Checking {files.Count} file(s)...";
+        Log($"Video folder: {folder} ({files.Count} video file(s)).");
+
+        if (files.Count > 0)
+            _ = ProbeFolderAsync(files, RequireFfmpeg(), generation);
     }
+
+    /// <summary>Reads each file's length and picture size, two at a time, and hides files that are not playable.</summary>
+    private async Task ProbeFolderAsync(List<string> files, string ffmpeg, int generation)
+    {
+        using var gate = new SemaphoreSlim(2);
+        var unplayable = new List<string>();
+        int playable = 0;
+
+        var work = files.Select(async file =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                if (generation != _folderGeneration)
+                    return;
+
+                var (info, saved, error) = await Task.Run(() => ProbeFile(ffmpeg, file));
+
+                // Back on the UI thread here.
+                if (generation != _folderGeneration || IsDisposed)
+                    return;
+
+                if (info is null)
+                {
+                    unplayable.Add($"{Path.GetFileName(file)} ({error})");
+                    FindItem(file)?.Remove();
+                }
+                else
+                {
+                    playable++;
+                    ShowFileDetails(file, info, saved);
+                }
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        try
+        {
+            await Task.WhenAll(work);
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "Checking the video folder");
+        }
+
+        if (generation != _folderGeneration || IsDisposed)
+            return;
+
+        _folderInfo.Text = $"{playable} playable video(s)" + (unplayable.Count > 0 ? $", {unplayable.Count} other file(s) hidden" : string.Empty) + ".";
+        if (unplayable.Count > 0)
+            Log("Not playable, so not listed: " + string.Join("; ", unplayable));
+    }
+
+    private static (VideoInfo? Info, SavedVideo? Saved, string? Error) ProbeFile(string ffmpeg, string file)
+    {
+        try
+        {
+            var info = VideoInfo.Probe(ffmpeg, file);
+            SavedVideo? saved = null;
+            try
+            {
+                saved = VideoSidecar.Load(file, info.DurationSeconds);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // Shown as unknown in the list; opening the video reports it properly.
+            }
+
+            return (info, saved, null);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            return (null, null, ex.Message.Split('\n')[0].Trim());
+        }
+    }
+
+    private void ShowFileDetails(string file, VideoInfo info, SavedVideo? saved)
+    {
+        var item = FindItem(file);
+        if (item is null)
+            return;
+
+        item.ForeColor = SystemColors.WindowText;
+        item.SubItems[1].Text = FormatTime(TimeSpan.FromSeconds(info.DurationSeconds));
+        item.SubItems[2].Text = $"{info.Width}x{info.Height} {info.FrameRate:0.##} fps";
+
+        if (_videos.TryGetValue(file, out var video))
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings);
+        else
+            item.SubItems[3].Text = saved is null ? "?" : DescribeSaved(saved.Skips, saved.Scanned, saved.Settings is not null);
+    }
+
+    /// <summary>Refreshes a video's row: its skips and the cameras playing it.</summary>
+    private void UpdateFileItem(string file)
+    {
+        var item = FindItem(file);
+        if (item is null)
+            return;
+
+        if (_videos.TryGetValue(file, out var video))
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings);
+
+        UpdateCameraColumn(item);
+    }
+
+    private void UpdateCameraColumn(ListViewItem item)
+    {
+        string file = (string)item.Tag!;
+        item.SubItems[4].Text = string.Join(", ", _entries
+            .Where(e => string.Equals(e.Video.Path, Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.StreamPath));
+    }
+
+    private ListViewItem? FindItem(string file)
+    {
+        string full = Path.GetFullPath(file);
+        return _files.Items.Cast<ListViewItem>()
+            .FirstOrDefault(i => string.Equals(Path.GetFullPath((string)i.Tag!), full, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings)
+    {
+        string text = skips.Count > 0
+            ? $"{skips.Count} skip(s), {FormatTime(TimeSpan.FromSeconds(skips.Sum(r => r.Length)))} cut"
+            : scanned ? "scanned, nothing cut" : "not scanned";
+
+        return ownSettings ? text + ", own settings" : text;
+    }
+
+    private void RememberFolder(string folder)
+    {
+        _options.VideoFolder = folder;
+        _options.RecentFolders = new[] { folder }
+            .Concat(_options.RecentFolders.Where(f => !string.Equals(f, folder, StringComparison.OrdinalIgnoreCase)))
+            .Take(10)
+            .ToArray();
+
+        if (!OptionsStore.Save(_options))
+            Log("WARNING: could not save the settings, so the folder is not remembered.");
+
+        RefreshFolderList();
+    }
+
+    private void RefreshFolderList()
+    {
+        _folder.Items.Clear();
+        _folder.Items.AddRange(_options.RecentFolders.Cast<object>().ToArray());
+        _folder.Text = _currentFolder.Length > 0 ? _currentFolder : _options.VideoFolder;
+    }
+
+    // ===================================================================== server
 
     private async Task StartServerAsync()
     {
@@ -261,7 +434,6 @@ public sealed partial class MainForm : Form
 
         string exe = RequireMediaMtx();
         int port = (int)_port.Value;
-
         var started = _options.Clone();
 
         await RunBusyAsync(async () =>
@@ -276,12 +448,9 @@ public sealed partial class MainForm : Form
 
     private void StopServer()
     {
-        // Stop and dispose every camera first, so no publisher outlives the server.
+        // Remove every camera first, so no publisher outlives the server.
         foreach (var entry in _entries.ToList())
-            DisposeCamera(entry);
-
-        _entries.Clear();
-        _cameras.Items.Clear();
+            RemoveCameraQuietly(entry);
 
         var server = _server;
         _server = null;
@@ -299,72 +468,57 @@ public sealed partial class MainForm : Form
         if (server is not null)
             Log("MediaMTX stopped.");
 
+        LayoutPanels();
         UpdateButtons();
     }
+
+    // ===================================================================== cameras
 
     private void AddCamera()
     {
         if (_server is null)
-            throw new InvalidOperationException("Start the MediaMTX server first.");
+            throw new InvalidOperationException("Start the server first.");
 
-        string path = _streamPath.Text.Trim().Trim('/');
+        if (_files.SelectedItems.Count == 0)
+            throw new InvalidOperationException("Pick a video in the list first.");
 
-        if (path.Length == 0)
-            throw new InvalidOperationException("Enter a stream path, for example Streaming/Channels/101.");
+        string file = (string)_files.SelectedItems[0].Tag!;
+        string path = CheckStreamPath(_streamPath.Text);
 
-        if (path.Any(c => char.IsWhiteSpace(c) || c is '?' or '#'))
-            throw new InvalidOperationException("The stream path cannot contain spaces, '?' or '#'.");
+        var video = OpenVideo(file);
+        MockCamera camera;
+        try
+        {
+            camera = new MockCamera(_server, path, video.Path, RequireFfmpeg(), CameraOptions(video));
+        }
+        catch
+        {
+            ReleaseVideoIfUnused(video);
+            throw;
+        }
 
-        if (_entries.Any(e => e.StreamPath.Equals(path, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException($"A camera with path '{path}' already exists.");
-
-        string source = _sourceFile.Text.Trim();
-
-        if (source.Length == 0)
-            throw new InvalidOperationException("Choose a video file to loop.");
-
-        if (!File.Exists(source))
-            throw new FileNotFoundException("Video file not found.", source);
-
-        var camera = new MockCamera(_server, path, source, RequireFfmpeg(), CameraOptions());
         camera.PublisherExited += (_, code) =>
         {
             string output = camera.LastFfmpegOutput;
             Log($"FFmpeg for '{path}' exited with code {code}. Stream is down."
                 + (output.Length > 0 ? Environment.NewLine + output : string.Empty));
         };
+        camera.SkipRanges = video.Skips;
 
-        var entry = new CameraEntry(path, source, camera);
+        var entry = new CameraEntry(path, video, camera);
         _entries.Add(entry);
-        _cameras.Items.Add(entry);
-        _cameras.SelectedItem = entry;
+        var panel = new CameraPanel(this, entry);
+        _panels[entry] = panel;
+        _cameras.Controls.Add(panel);
+        LayoutPanels();
+        _cameras.ScrollControlIntoView(panel);
 
-        // Thumbnails for the timeline, made in the background. Shared by cameras playing the same file.
-        if (!_thumbnails.ContainsKey(source))
-            _thumbnails[source] = ThumbnailStrip.Start(RequireFfmpeg(), source, camera.Source);
+        Log($"Added camera {camera.Url} playing {video.Name}.");
+        _streamPath.Text = NextStreamPath();
+        UpdateFileItem(video.Path);
 
-        // Skip ranges saved next to the video come back with it. A video seen for the first
-        // time is scanned for motion, so only the parts with movement play.
-        if (!_skips.TryGetValue(source, out var skips))
-        {
-            var saved = LoadSkips(source, camera.Duration.TotalSeconds);
-            skips = saved.Skips;
-            _skips[source] = skips;
-            if (saved.Motion is not null)
-                _motion[source] = saved.Motion;
-
-            if (!saved.FileExists && _options.AutoScanMotion)
-                StartScan(source, camera.Source, automatic: true);
-        }
-        camera.SkipRanges = skips;
-
-        RecentFiles.Add(source);
-        RefreshRecentFiles();
-
-        Log($"Added camera {camera.Url}");
-
-        // A camera is live as soon as it is added. If FFmpeg cannot start, the camera stays
-        // in the list (stopped) and the error is shown.
+        // A camera is live as soon as it is added. If FFmpeg cannot start, it stays (stopped)
+        // and the error is shown.
         try
         {
             camera.Start();
@@ -376,10 +530,144 @@ public sealed partial class MainForm : Form
         }
     }
 
-    private async Task OpenInVlcAsync()
+    /// <summary>The video for a file: the one already in use, or opened now (settings, skips, motion, previews).</summary>
+    private VideoFile OpenVideo(string file)
     {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
+        string full = Path.GetFullPath(file);
+        if (_videos.TryGetValue(full, out var existing))
+            return existing;
 
+        var video = new VideoFile(RequireFfmpeg(), full);
+        video.Message += (_, message) => Log(message);
+        video.Changed += OnVideoChanged;
+        video.Load(_options);
+        _videos[full] = video;
+        return video;
+    }
+
+    /// <summary>A video's skips changed (edited, scanned, new settings): every camera playing it follows.</summary>
+    private void OnVideoChanged(object? sender, EventArgs e)
+    {
+        if (sender is not VideoFile video)
+            return;
+
+        foreach (var entry in CamerasOf(video))
+            entry.Camera.SkipRanges = video.Skips;
+
+        UpdateFileItem(video.Path);
+    }
+
+    private IEnumerable<CameraEntry> CamerasOf(VideoFile video) => _entries.Where(e => ReferenceEquals(e.Video, video)).ToList();
+
+    private void ReleaseVideoIfUnused(VideoFile video)
+    {
+        if (_entries.Any(e => ReferenceEquals(e.Video, video)))
+            return;
+
+        _videos.Remove(video.Path);
+        video.Changed -= OnVideoChanged;
+        video.Dispose();
+    }
+
+    private string CheckStreamPath(string text)
+    {
+        string path = text.Trim().Trim('/');
+
+        if (path.Length == 0)
+            throw new InvalidOperationException("Enter a stream path, for example Streaming/Channels/101.");
+
+        if (path.Any(c => char.IsWhiteSpace(c) || c is '?' or '#'))
+            throw new InvalidOperationException("The stream path cannot contain spaces, '?' or '#'.");
+
+        if (_entries.Any(e => e.StreamPath.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"A camera with path '{path}' already exists.");
+
+        return path;
+    }
+
+    /// <summary>The next free Hikvision-style path: Streaming/Channels/101, 201, 301 and so on.</summary>
+    private string NextStreamPath()
+    {
+        for (int channel = 1; channel < 1000; channel++)
+        {
+            string candidate = $"Streaming/Channels/{channel}01";
+            if (!_entries.Any(e => e.StreamPath.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+                return candidate;
+        }
+
+        return "Streaming/Channels/101";
+    }
+
+    public void StartCamera(CameraEntry entry)
+    {
+        entry.Camera.Start();
+        Log($"Started {entry.Camera.Url}");
+    }
+
+    public void StopCamera(CameraEntry entry)
+    {
+        entry.Camera.Stop();
+        Log($"Stopped {entry.Camera.Url}");
+    }
+
+    public void RemoveCamera(CameraEntry entry)
+    {
+        RemoveCameraQuietly(entry);
+        Log($"Removed {entry.StreamPath}");
+
+        // Offer the freed path again, unless the user typed a path of their own.
+        if (System.Text.RegularExpressions.Regex.IsMatch(_streamPath.Text.Trim(), @"^Streaming/Channels/\d+01$"))
+            _streamPath.Text = NextStreamPath();
+        LayoutPanels();
+        UpdateButtons();
+    }
+
+    private void RemoveCameraQuietly(CameraEntry entry)
+    {
+        // The VLC window would only show a dead stream, so close it with the camera.
+        VlcLauncher.Close(entry.Vlc);
+        entry.Vlc = null;
+
+        try
+        {
+            entry.Camera.Dispose();
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, $"Disposing camera {entry.StreamPath}");
+        }
+
+        _entries.Remove(entry);
+        if (_panels.TryGetValue(entry, out var panel))
+        {
+            _panels.Remove(entry);
+            _cameras.Controls.Remove(panel);
+            panel.Dispose();
+        }
+
+        ReleaseVideoIfUnused(entry.Video);
+        UpdateFileItem(entry.Video.Path);
+    }
+
+    public void ScanMotion(CameraEntry entry)
+    {
+        var video = entry.Video;
+
+        if (video.IsScanning)
+            throw new InvalidOperationException($"{video.Name} is being scanned already.");
+
+        if (video.Skips.Count > 0 && MessageBox.Show(this,
+                $"Replace the {video.Skips.Count} skip(s) of {video.Name} with the result of a new motion scan?",
+                "Scan motion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        video.StartScan(automatic: false);
+    }
+
+    public async Task OpenInVlcAsync(CameraEntry entry)
+    {
         if (!entry.Camera.IsOnline)
             throw new InvalidOperationException("Start the camera first, then open it in VLC.");
 
@@ -406,9 +694,175 @@ public sealed partial class MainForm : Form
         entry.Vlc = VlcLauncher.Open(vlc, entry.Camera.ViewerUrl, entry.StreamPath);
     }
 
+    public async Task SimulateOutageAsync(CameraEntry entry, int seconds)
+    {
+        Log($"Simulating outage on '{entry.StreamPath}' for {seconds} s...");
+
+        bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
+        bool live = false;
+
+        await RunBusyAsync(async () =>
+        {
+            await entry.Camera.SimulateOutageAsync(TimeSpan.FromSeconds(seconds));
+            live = await entry.Camera.WaitUntilLiveAsync(TimeSpan.FromSeconds(10));
+        });
+
+        Log(live
+            ? $"Outage on '{entry.StreamPath}' ended. The stream is back."
+            : $"Outage on '{entry.StreamPath}' ended, but the stream did not come back. See the FFmpeg lines above.");
+
+        // VLC gives up during the outage and does not reconnect, so reopen it.
+        if (live && hadVlc)
+            OpenVlc(entry);
+    }
+
+    /// <summary>Lays the camera panels out one under the other, as wide as the area.</summary>
+    private void LayoutPanels()
+    {
+        _camerasHint.Visible = _panels.Count == 0;
+        if (_panels.Count == 0)
+            return;
+
+        // Always leave room for the vertical scrollbar, so the panels never need a horizontal one
+        // and do not jump when the vertical one appears.
+        int width = _cameras.Width - SystemInformation.VerticalScrollBarWidth - 6;
+        if (width < 200)
+            return;
+
+        foreach (var panel in _panels.Values)
+        {
+            if (panel.Width != width)
+                panel.Width = width;
+
+            int height = panel.HeightFor(width);
+            if (panel.Height != height)
+                panel.Height = height;
+        }
+    }
+
+    // ===================================================================== settings
+
     /// <summary>
-    /// Restarts a running camera with the current settings, waits until the new stream plays,
-    /// and reopens its VLC window. Viewers are disconnected by the restart, just as with a real
+    /// The main settings: defaults for videos without their own, and the server. Cameras of
+    /// videos that follow the defaults restart if their stream changes; new motion settings pick
+    /// their skips again from the saved scans.
+    /// </summary>
+    private async Task EditSettingsAsync()
+    {
+        StreamOptions edited;
+        using (var dialog = new OptionsDialog(_options))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            edited = dialog.Result;
+        }
+
+        var old = _options;
+        _options = edited;
+
+        if (!OptionsStore.Save(_options))
+            Log("WARNING: the settings could not be saved to disk, so they will be lost when the app closes.");
+
+        var before = VideoSettings.From(old);
+        var after = VideoSettings.From(_options);
+        bool publishingChanged = old.PublishTransport != _options.PublishTransport || old.FfmpegLogLevel != _options.FfmpegLogLevel;
+        int own = _videos.Values.Count(v => v.HasOwnSettings);
+
+        Log($"Defaults saved: {Describe(_options)}."
+            + (own > 0 ? $" {own} video(s) with their own settings keep them." : string.Empty));
+
+        var restart = new List<CameraEntry>();
+        foreach (var video in _videos.Values.ToList())
+        {
+            if (video.HasOwnSettings)
+            {
+                if (publishingChanged)
+                    restart.AddRange(CamerasOf(video));
+                continue;
+            }
+
+            ReapplyMotion(video, before, after);
+
+            if (!before.SameStream(after) || publishingChanged)
+                restart.AddRange(CamerasOf(video));
+        }
+
+        await RestartAsync(restart);
+
+        if (_server is not null && _serverOptions is not null && !_serverOptions.ServerSettingsEqual(_options))
+            Log("The server settings (transports, timeouts, logins, log level) changed. " +
+                "Stop and start the server for them to take effect.");
+    }
+
+    /// <summary>One video's own settings, saved next to it. "Use defaults" in the dialog goes back to the defaults.</summary>
+    public async Task EditVideoSettingsAsync(CameraEntry entry)
+    {
+        var video = entry.Video;
+        var before = video.Effective(_options);
+
+        var current = _options.Clone();
+        before.ApplyTo(current);
+
+        StreamOptions result;
+        using (var dialog = new OptionsDialog(current, video.Name, _options))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            result = dialog.Result;
+        }
+
+        var after = VideoSettings.From(result);
+        var defaults = VideoSettings.From(_options);
+        bool sameAsDefaults = after.SameStream(defaults) && after.SameMotion(defaults);
+
+        video.SetOwnSettings(sameAsDefaults ? null : after);
+        ReapplyMotion(video, before, after);
+
+        if (!before.SameStream(after))
+            await RestartAsync(CamerasOf(video));
+    }
+
+    /// <summary>
+    /// New motion settings: picks the skips again from the saved motion data, at once and
+    /// without rescanning. Skips edited by hand are only replaced if the user agrees.
+    /// </summary>
+    private void ReapplyMotion(VideoFile video, VideoSettings before, VideoSettings after)
+    {
+        if (before.SameMotion(after) || video.Motion is null)
+            return;
+
+        if (video.SkipsMatchScan(before)
+            || MessageBox.Show(this,
+                $"{video.Name} has skips you changed by hand. Pick its skips again from the saved motion data, "
+                + "with the new motion settings? Your changes would be replaced.",
+                "New motion settings", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+        {
+            video.ApplyMotionSettings(after);
+        }
+        else
+        {
+            Log($"{video.Name}: skips kept as you edited them. Scan motion picks them from a fresh scan.");
+        }
+    }
+
+    private async Task RestartAsync(IEnumerable<CameraEntry> entries)
+    {
+        var list = entries.Distinct().ToList();
+        if (list.Count == 0)
+            return;
+
+        await RunBusyAsync(async () =>
+        {
+            foreach (var entry in list)
+                await ApplySettingsToCameraAsync(entry);
+        });
+    }
+
+    /// <summary>
+    /// Restarts a camera with its current settings, waits until the new stream plays, and
+    /// reopens its VLC window. Viewers are disconnected by the restart, just as with a real
     /// camera that changes resolution, and VLC does not reconnect by itself.
     /// </summary>
     private async Task ApplySettingsToCameraAsync(CameraEntry entry)
@@ -418,11 +872,11 @@ public sealed partial class MainForm : Form
             bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
             bool wasOnline = entry.Camera.IsOnline;
 
-            entry.Camera.ApplyOptions(CameraOptions());
+            entry.Camera.ApplyOptions(CameraOptions(entry.Video));
 
             if (!wasOnline)
             {
-                Log($"'{entry.StreamPath}': saved. It uses the new settings when started.");
+                Log($"'{entry.StreamPath}': uses the new settings when started.");
                 return;
             }
 
@@ -447,456 +901,14 @@ public sealed partial class MainForm : Form
         }
     }
 
-    /// <summary>What a camera actually sends, e.g. "1280x720, 15 fps, 2000 kbps".</summary>
-    private static string Describe(VideoFormat format, StreamOptions o)
-    {
-        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
-        return $"{format.Width}x{format.Height}, {format.FrameRate} fps{bitrate}";
-    }
-
-    /// <summary>The settings themselves, e.g. "original size, 15 fps".</summary>
-    private static string Describe(StreamOptions o)
-    {
-        string size = o.Width > 0 ? o.Width + "x" + o.Height : "original size";
-        string rate = o.FrameRate > 0 ? o.FrameRate + " fps" : "original frame rate";
-        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
-        return size + ", " + rate + bitrate;
-    }
-
-    /// <summary>With tenths of a second, for skip edges, e.g. "01:23.4".</summary>
-    private static string FormatPrecise(double seconds)
-    {
-        var time = TimeSpan.FromSeconds(Math.Max(0, Math.Round(seconds, 1)));
-        return time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss\.f") : time.ToString(@"mm\:ss\.f");
-    }
-
-    private static string FormatTime(TimeSpan time) =>
-        time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
-
-    // ---- Player: pause, rewind, forward, seek and speed for the selected camera ----
-
-    private void OnPlayPauseClick(object? sender, EventArgs e) => Safe(TogglePause, "Play/Pause");
-
-    private void OnBack10Click(object? sender, EventArgs e) => Safe(() => SeekSelectedBy(-10), "Rewind");
-
-    private void OnForward10Click(object? sender, EventArgs e) => Safe(() => SeekSelectedBy(10), "Forward");
-
-    private void OnTimelineSeek(object? sender, double seconds) => Safe(() =>
-    {
-        var entry = SelectedEntry;
-        if (entry is null)
-            return;
-
-        entry.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
-        Log($"'{entry.StreamPath}': jumped to {FormatTime(entry.Camera.Position)}.");
-        UpdatePlayer();
-    }, "Seek");
-
-    private void OnZoomInClick(object? sender, EventArgs e) => _timeline.ZoomIn();
-
-    private void OnZoomOutClick(object? sender, EventArgs e) => _timeline.ZoomOut();
-
-    private void OnZoomFitClick(object? sender, EventArgs e) => _timeline.ZoomToFit();
-
-    // ---- Skip ranges: parts of a video the cameras jump over, saved next to the video ----
-
-    private void OnSkipStartClick(object? sender, EventArgs e) => Safe(() =>
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-        double start = entry.Camera.Position.TotalSeconds;
-
-        _pendingSkip = (entry.SourceFile, start);
-        Log($"'{entry.StreamPath}': skip starts at {FormatPrecise(start)}. Move to where it should end and click Skip end.");
-        UpdatePlayer();
-    }, "Skip start");
-
-    private void OnSkipEndClick(object? sender, EventArgs e) => Safe(() =>
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        if (_pendingSkip is not { } pending || !string.Equals(pending.File, entry.SourceFile, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Click Skip start first, at the moment the skip should begin.");
-
-        double end = entry.Camera.Position.TotalSeconds;
-        _pendingSkip = null;
-
-        if (Math.Abs(end - pending.Start) < SkipRanges.MinLength)
-            throw new InvalidOperationException("The skip is too short. Move the playhead further from where it starts.");
-
-        var current = _skips.TryGetValue(entry.SourceFile, out var list) ? list : Array.Empty<SkipRange>();
-        SetSkips(entry.SourceFile, current.Append(new SkipRange(Math.Min(pending.Start, end), Math.Max(pending.Start, end))),
-            entry.Camera.Duration.TotalSeconds);
-        UpdatePlayer();
-    }, "Skip end");
-
-    /// <summary>The user drew, moved or deleted skip ranges on the timeline.</summary>
-    private void OnTimelineSkipsChanged(object? sender, EventArgs e) => Safe(() =>
-    {
-        var entry = SelectedEntry;
-        if (entry is not null)
-            SetSkips(entry.SourceFile, _timeline.SkipRanges, entry.Camera.Duration.TotalSeconds);
-    }, "Skip ranges");
-
     /// <summary>
-    /// Applies a video's skip ranges to every camera playing it, and saves them next to the video.
+    /// The options for a camera: the defaults, with the video's own settings over them, and the
+    /// logins the running server was started with (changed logins are refused until it restarts).
     /// </summary>
-    private void SetSkips(string file, IEnumerable<SkipRange> ranges, double duration)
-    {
-        var normalized = SkipRanges.Normalize(ranges, duration);
-        _skips[file] = normalized;
-
-        foreach (var entry in _entries.Where(x => string.Equals(x.SourceFile, file, StringComparison.OrdinalIgnoreCase)))
-            entry.Camera.SkipRanges = normalized;
-
-        if (!SkipRanges.LeavesSomethingToPlay(normalized, duration))
-            Log("Every part of the video is marked to skip, so the skips are ignored until some are removed.");
-
-        try
-        {
-            SkipRangeFile.Save(file, normalized, _motion.TryGetValue(file, out var motion) ? motion : null);
-            Log(normalized.Count == 0
-                ? $"No skips left for {Path.GetFileName(file)}; removed {Path.GetFileName(SkipRangeFile.PathFor(file))}."
-                : $"Saved {normalized.Count} skip(s) to {Path.GetFileName(SkipRangeFile.PathFor(file))}: "
-                  + string.Join(", ", normalized.Select(r => $"{FormatPrecise(r.Start)}-{FormatPrecise(r.End)}")));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            ErrorReporter.Report(ex, $"Saving skips for {file}");
-            Log($"ERROR: the skips are in use but could not be saved next to the video ({ex.Message}). "
-                + "They will be lost when the app closes. Check that the video's folder is writable.");
-        }
-
-        _timeline.SetSkipRanges(normalized);
-    }
-
-    private SavedSkips LoadSkips(string file, double duration)
-    {
-        try
-        {
-            var saved = SkipRangeFile.Load(file, duration);
-            if (saved.FileExists)
-                Log($"Loaded {saved.Skips.Count} skip(s) from {Path.GetFileName(SkipRangeFile.PathFor(file))}"
-                    + (saved.Scanned ? " (motion scanned before; click Scan motion to scan again)." : "."));
-            return saved;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        {
-            ErrorReporter.Report(ex, $"Loading skips for {file}");
-            Log($"ERROR: could not read the skips saved next to the video ({ex.Message}). Playing without skips; "
-                + "the file is left as it is until you change the skips or scan again.");
-
-            // Report the file as existing, so an automatic scan does not overwrite it.
-            return new SavedSkips(new List<SkipRange>(), null, true);
-        }
-    }
-
-    // ---- Motion scan: still parts become skips, so only the parts with movement play ----
-
-    private void OnScanMotionClick(object? sender, EventArgs e) => Safe(() =>
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        if (_scans.ContainsKey(entry.SourceFile))
-            throw new InvalidOperationException("This video is being scanned already.");
-
-        int existing = _skips.TryGetValue(entry.SourceFile, out var list) ? list.Count : 0;
-        if (existing > 0 && MessageBox.Show(this,
-                $"Replace the {existing} skip(s) of {Path.GetFileName(entry.SourceFile)} with the result of a new motion scan?",
-                "Scan motion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-        {
-            return;
-        }
-
-        StartScan(entry.SourceFile, entry.Camera.Source, automatic: false);
-        UpdatePlayer();
-    }, "Scan motion");
-
-    private void StartScan(string file, VideoInfo source, bool automatic)
-    {
-        if (_scans.ContainsKey(file))
-            return;
-
-        _scans[file] = (MotionScan.Start(RequireFfmpeg(), file, source), automatic);
-        Log($"Scanning {Path.GetFileName(file)} for movement"
-            + (automatic ? " (first time this video is added). It plays in full until the scan is done." : "."));
-    }
-
-    /// <summary>Called by the timer: applies the result of every scan that has finished.</summary>
-    private void CheckScans()
-    {
-        foreach (var pair in _scans.Where(x => x.Value.Scan.IsComplete).ToList())
-        {
-            string file = pair.Key;
-            var job = pair.Value;
-            _scans.Remove(file);
-
-            if (job.Scan.IsCancelled)
-                continue;
-
-            if (job.Scan.Result is not { } profile)
-            {
-                Log($"ERROR: the motion scan of {Path.GetFileName(file)} failed: {job.Scan.Error}");
-                continue;
-            }
-
-            var camera = _entries.FirstOrDefault(x => string.Equals(x.SourceFile, file, StringComparison.OrdinalIgnoreCase))?.Camera;
-            if (camera is null)
-                continue;                               // the camera was removed meanwhile
-
-            double duration = camera.Duration.TotalSeconds;
-            var still = profile.StillParts(_options.MotionThresholdPercent, _options.MinStillSeconds, _options.MotionPaddingSeconds, duration);
-            _motion[file] = profile;
-
-            // An automatic scan never overwrites skips the user made while it ran.
-            var current = _skips.TryGetValue(file, out var list) ? list : Array.Empty<SkipRange>();
-            if (job.Automatic && current.Count > 0)
-            {
-                SetSkips(file, current, duration);
-                Log($"Motion scan of {Path.GetFileName(file)} done. Your skips were kept; click Scan motion to replace them with the scan.");
-                continue;
-            }
-
-            SetSkips(file, still, duration);
-
-            double skipped = still.Sum(r => r.Length);
-            if (still.Count == 0)
-                Log($"Motion scan of {Path.GetFileName(file)}: nothing to skip"
-                    + (profile.Levels.All(l => l < _options.MotionThresholdPercent * 10)
-                        ? $" (no movement over {_options.MotionThresholdPercent:0.0} % found, so the whole video plays; lower Movement needed in Settings to find smaller movement)."
-                        : " (movement throughout)."));
-            else
-                Log($"Motion scan of {Path.GetFileName(file)}: skipping {still.Count} still part(s), "
-                    + $"{FormatTime(TimeSpan.FromSeconds(skipped))} of {FormatTime(camera.Duration)}; "
-                    + $"{FormatTime(TimeSpan.FromSeconds(duration - skipped))} with movement plays.");
-        }
-    }
-
-    private void OnSpeedChanged(object? sender, EventArgs e)
-    {
-        if (_updatingPlayer)
-            return;
-
-        Safe(() =>
-        {
-            var entry = SelectedEntry;
-            if (entry is null || _speed.SelectedIndex < 0)
-                return;
-
-            entry.Camera.Speed = Speeds[_speed.SelectedIndex];
-            Log($"'{entry.StreamPath}': speed {entry.Camera.Speed:0.##}x.");
-        }, "Speed");
-    }
-
-    private void TogglePause()
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-        var camera = entry.Camera;
-
-        if (camera.IsPaused)
-        {
-            camera.Resume();
-            Log($"'{entry.StreamPath}': playing from {FormatTime(camera.Position)}.");
-        }
-        else
-        {
-            camera.Pause();
-            Log($"'{entry.StreamPath}': paused at {FormatTime(camera.Position)}.");
-        }
-
-        UpdatePlayer();
-    }
-
-    private void SeekSelectedBy(int seconds)
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        entry.Camera.SeekBy(TimeSpan.FromSeconds(seconds));
-        Log($"'{entry.StreamPath}': {(seconds < 0 ? "back" : "forward")} {Math.Abs(seconds)} s to {FormatTime(entry.Camera.Position)}.");
-        UpdatePlayer();
-    }
-
-    /// <summary>Shows the selected camera's position, pause state and speed in the player row.</summary>
-    private void UpdatePlayer()
-    {
-        var entry = SelectedEntry;
-        bool enabled = !_busy && entry is not null;
-
-        _back10.Enabled = enabled;
-        _playPause.Enabled = enabled;
-        _forward10.Enabled = enabled;
-        _speed.Enabled = enabled;
-        _zoomOut.Enabled = entry is not null;
-        _zoomIn.Enabled = entry is not null;
-        _zoomFit.Enabled = entry is not null;
-        _skipStart.Enabled = enabled;
-        _skipEnd.Enabled = enabled && _pendingSkip is not null;
-        _scanMotion.Enabled = enabled && !_scans.ContainsKey(entry!.SourceFile);
-        _timeline.Enabled = enabled;
-
-        if (entry is null)
-        {
-            _timeLabel.Text = "--:-- / --:--";
-            _timeline.SetSource(null, 0);
-            return;
-        }
-
-        var camera = entry.Camera;
-        _updatingPlayer = true;
-        try
-        {
-            _playPause.Text = camera.IsPaused ? "Play" : "Pause";
-
-            _timeLabel.Text = $"{FormatTime(camera.Position)} / {FormatTime(camera.Duration)}";
-
-            _thumbnails.TryGetValue(entry.SourceFile, out var strip);
-            _timeline.SetSource(strip, camera.Duration.TotalSeconds);
-            _timeline.SetSkipRanges(_skips.TryGetValue(entry.SourceFile, out var skips) ? skips : Array.Empty<SkipRange>());
-            _timeline.SetMotion(_motion.TryGetValue(entry.SourceFile, out var motion) ? motion : null, _options.MotionThresholdPercent);
-            _timeline.ScanProgress = _scans.TryGetValue(entry.SourceFile, out var job) ? job.Scan.Progress : null;
-            _timeline.PendingStart = _pendingSkip is { } pending
-                && string.Equals(pending.File, entry.SourceFile, StringComparison.OrdinalIgnoreCase) ? pending.Start : null;
-            _timeline.Position = camera.Position.TotalSeconds;
-            _timeline.Invalidate();             // new thumbnails may have arrived
-
-            int speedIndex = Array.IndexOf(Speeds, camera.Speed);
-            if (_speed.SelectedIndex != speedIndex)
-                _speed.SelectedIndex = speedIndex;
-        }
-        finally
-        {
-            _updatingPlayer = false;
-        }
-    }
-
-    private void RefreshRecentFiles()
-    {
-        string current = _sourceFile.Text;
-
-        _sourceFile.Items.Clear();
-        _sourceFile.Items.AddRange(RecentFiles.Load().ToArray());
-        _sourceFile.Text = current;
-    }
-
-    private void StartSelectedCamera()
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        entry.Camera.Start();
-        Log($"Started {entry.Camera.Url}");
-        UpdateButtons();
-    }
-
-    private void StopSelectedCamera()
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        entry.Camera.Stop();
-        Log($"Stopped {entry.Camera.Url}");
-        UpdateButtons();
-    }
-
-    private void RemoveSelectedCamera()
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-
-        DisposeCamera(entry);
-        _entries.Remove(entry);
-        _cameras.Items.Remove(entry);
-
-        // Drop the thumbnails unless another camera plays the same file.
-        if (!_entries.Any(other => string.Equals(other.SourceFile, entry.SourceFile, StringComparison.OrdinalIgnoreCase))
-            && _thumbnails.TryGetValue(entry.SourceFile, out var strip))
-        {
-            _thumbnails.Remove(entry.SourceFile);
-            _skips.Remove(entry.SourceFile);
-            _motion.Remove(entry.SourceFile);
-            if (_scans.TryGetValue(entry.SourceFile, out var job))
-            {
-                job.Scan.Dispose();
-                _scans.Remove(entry.SourceFile);
-            }
-            strip.Dispose();
-        }
-
-        Log($"Removed {entry.StreamPath}");
-        UpdateButtons();
-    }
-
-    private async Task SimulateOutageAsync()
-    {
-        var entry = SelectedEntry ?? throw new InvalidOperationException("Select a camera first.");
-        int seconds = (int)_outageSeconds.Value;
-
-        Log($"Simulating outage on '{entry.StreamPath}' for {seconds} s...");
-
-        bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
-        bool live = false;
-
-        await RunBusyAsync(async () =>
-        {
-            await entry.Camera.SimulateOutageAsync(TimeSpan.FromSeconds(seconds));
-            live = await entry.Camera.WaitUntilLiveAsync(TimeSpan.FromSeconds(10));
-        });
-
-        Log(live
-            ? $"Outage on '{entry.StreamPath}' ended. The stream is back."
-            : $"Outage on '{entry.StreamPath}' ended, but the stream did not come back. See the FFmpeg lines above.");
-
-        // VLC gives up during the outage and does not reconnect, so reopen it.
-        if (live && hadVlc)
-            OpenVlc(entry);
-
-        UpdateButtons();
-    }
-
-    /// <summary>
-    /// The one place to change stream settings. Saving applies them to every camera:
-    /// running cameras restart with the new settings and their VLC windows reopen.
-    /// </summary>
-    private async Task EditSettingsAsync()
-    {
-        StreamOptions edited;
-        using (var dialog = new OptionsDialog(_options))
-        {
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-                return;
-
-            edited = dialog.Result;
-        }
-
-        _options = edited;
-
-        if (!OptionsStore.Save(_options))
-            Log("WARNING: the settings could not be saved to disk, so they will be lost when the app closes.");
-
-        if (_entries.Count == 0)
-        {
-            Log($"Settings saved: {Describe(_options)}. Cameras you add will use them.");
-        }
-        else
-        {
-            Log($"Settings saved: {Describe(_options)}. Applying to {_entries.Count} camera(s)...");
-            await RunBusyAsync(async () =>
-            {
-                foreach (var entry in _entries.ToList())
-                    await ApplySettingsToCameraAsync(entry);
-            });
-        }
-
-        if (_server is not null && _serverOptions is not null && !_serverOptions.ServerSettingsEqual(_options))
-            Log("The server settings (transports, timeouts, logins, log level) changed. " +
-                "Stop and start the server for them to take effect.");
-
-        UpdateButtons();
-    }
-
-    /// <summary>
-    /// The options for a camera: the saved options, but with the logins the running server
-    /// was started with, because changed logins would be refused until the server restarts.
-    /// </summary>
-    private StreamOptions CameraOptions()
+    private StreamOptions CameraOptions(VideoFile video)
     {
         var options = _options.Clone();
+        video.Effective(_options).ApplyTo(options);
 
         if (_serverOptions is not null)
         {
@@ -909,21 +921,7 @@ public sealed partial class MainForm : Form
         return options;
     }
 
-    private void DisposeCamera(CameraEntry entry)
-    {
-        // The VLC window would only show a dead stream, so close it with the camera.
-        VlcLauncher.Close(entry.Vlc);
-        entry.Vlc = null;
-
-        try
-        {
-            entry.Camera.Dispose();
-        }
-        catch (Exception ex)
-        {
-            ErrorReporter.Report(ex, $"Disposing camera {entry.StreamPath}");
-        }
-    }
+    // ===================================================================== helpers
 
     private async Task RunBusyAsync(Func<Task> work)
     {
@@ -944,33 +942,39 @@ public sealed partial class MainForm : Form
     private void UpdateButtons()
     {
         bool serverUp = _server is not null;
-        var selected = SelectedEntry;
-        bool selectedOnline = selected?.Camera.IsOnline ?? false;
 
         _port.Enabled = !serverUp && !_busy;
         _optionsButton.Enabled = !_busy;
         _startServer.Enabled = !serverUp && !_busy && _mediaMtxExe is not null;
         _stopServer.Enabled = serverUp && !_busy;
-
-        _streamPath.Enabled = serverUp && !_busy;
-        _sourceFile.Enabled = serverUp && !_busy;
-        _browseVideo.Enabled = serverUp && !_busy;
-        _addCamera.Enabled = serverUp && !_busy;
-
-        _startCamera.Enabled = !_busy && selected is not null && !selectedOnline;
-        _stopCamera.Enabled = !_busy && selected is not null && selectedOnline;
-        _removeCamera.Enabled = !_busy && selected is not null;
-        _openVlc.Enabled = !_busy && selectedOnline;
-        _outage.Enabled = !_busy && selected is not null;
+        _addCamera.Enabled = serverUp && !_busy && _files.SelectedItems.Count > 0;
+        _streamPath.Enabled = !_busy;
 
         _statusText.Text = serverUp
             ? $"MediaMTX running on port {_server!.Port}  |  cameras: {_entries.Count}"
             : _mediaMtxExe is null ? "MediaMTX not found" : "Server stopped";
-
-        UpdatePlayer();
     }
 
-    private void Log(string message)
+    /// <summary>What a camera actually sends, e.g. "1280x720, 15 fps, 2000 kbps".</summary>
+    private static string Describe(VideoFormat format, StreamOptions o)
+    {
+        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
+        return $"{format.Width}x{format.Height}, {format.FrameRate} fps{bitrate}";
+    }
+
+    /// <summary>The settings themselves, e.g. "original size, 15 fps".</summary>
+    private static string Describe(StreamOptions o)
+    {
+        string size = o.Width > 0 ? o.Width + "x" + o.Height : "original size";
+        string rate = o.FrameRate > 0 ? o.FrameRate + " fps" : "original frame rate";
+        string bitrate = o.BitrateKbps > 0 ? ", " + o.BitrateKbps + " kbps" : string.Empty;
+        return size + ", " + rate + bitrate;
+    }
+
+    private static string FormatTime(TimeSpan time) =>
+        time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
+
+    public void Log(string message)
     {
         if (IsDisposed)
             return;

@@ -2,11 +2,16 @@ namespace MockRtsp;
 
 /// <summary>
 /// Edits a copy of StreamOptions. Result is only updated when OK is clicked with valid values.
+/// Two uses:
+///   main settings   defaults for videos, plus the server
+///   one video       only the settings a video can have of its own; "Use defaults" fills in
+///                   the main defaults
 /// The layout lives in OptionsDialog.Designer.cs.
 /// </summary>
 public sealed partial class OptionsDialog : Form
 {
     private readonly StreamOptions _working;
+    private readonly StreamOptions? _defaults;      // set for one video; what "Use defaults" loads
 
     public StreamOptions Result { get; private set; }
 
@@ -15,15 +20,49 @@ public sealed partial class OptionsDialog : Form
     {
     }
 
-    public OptionsDialog(StreamOptions current)
+    /// <summary>The main settings: defaults for videos, and the server.</summary>
+    public OptionsDialog(StreamOptions current) : this(current, null, null)
+    {
+    }
+
+    /// <summary>
+    /// One video's settings when videoName is given: current holds the settings in force for it,
+    /// defaults the main defaults.
+    /// </summary>
+    public OptionsDialog(StreamOptions current, string? videoName, StreamOptions? defaults)
     {
         InitializeComponent();
 
         _working = current.Clone();
+        _defaults = defaults?.Clone();
         Result = _working;
+
+        if (videoName is not null)
+            ShowAsVideoSettings(videoName);
 
         FillComboBoxes();
         LoadValues(_working);
+    }
+
+    /// <summary>Only the settings a single video can have: no server tab, no app-wide options.</summary>
+    private void ShowAsVideoSettings(string videoName)
+    {
+        Text = "Settings for " + videoName;
+        _tabs.TabPages.Remove(_tabMtx);
+        _tabFfmpeg.Text = videoName;
+        _ffIntro.Text = $"Settings for this video only, saved next to it in {videoName}.mockrtsp.json. "
+                        + "Cameras playing it restart with the new settings, keeping position, pause and speed. "
+                        + "New motion settings pick skips again from the saved scan, without scanning again.";
+        _reset.Text = "Use defaults";
+
+        // App-wide options stay in the main settings.
+        _autoScan.Visible = false;
+        _hdrPublish.Visible = false;
+        _lblPublishTransport.Visible = false;
+        _publishTransport.Visible = false;
+        _lblFfmpegLog.Visible = false;
+        _ffmpegLog.Visible = false;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height - 90);
     }
 
     private void FillComboBoxes()
@@ -119,7 +158,7 @@ public sealed partial class OptionsDialog : Form
 
     // ---- Event handlers (wired in OptionsDialog.Designer.cs) ----
 
-    private void OnResetClick(object? sender, EventArgs e) => LoadValues(new StreamOptions());
+    private void OnResetClick(object? sender, EventArgs e) => LoadValues(_defaults ?? new StreamOptions());
 
     private void OnOkClick(object? sender, EventArgs e)
     {

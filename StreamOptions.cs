@@ -49,6 +49,10 @@ public sealed class StreamOptions
     public string PublisherUser { get; set; } = string.Empty;
     public string PublisherPassword { get; set; } = string.Empty;
 
+    // ---- Remembered between runs ----
+    public string VideoFolder { get; set; } = string.Empty;
+    public string[] RecentFolders { get; set; } = Array.Empty<string>();
+
     public StreamOptions Clone() => (StreamOptions)MemberwiseClone();
 
     /// <summary>True when every setting that only applies at server start is the same in both.</summary>
