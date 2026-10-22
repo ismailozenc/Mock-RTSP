@@ -79,17 +79,32 @@ public sealed partial class MainForm : Form, ICameraHost
         UpdateButtons();
     }
 
-    /// <summary>Videos list about half the width; the log a few lines high.</summary>
+    /// <summary>
+    /// Videos list about two fifths of the width; the log a few lines high. The minimum panel sizes are set
+    /// here, not in the designer: while the window is being built the splitters are still 150x100, too small
+    /// for them, and Windows throws.
+    /// </summary>
     private void SetSplitters()
     {
+        FitSplitter(_content, _content.Width, Math.Min(610, _content.Width * 2 / 5), 200, 300);
+        FitSplitter(_split, _split.Height, _split.Height - Math.Max(120, _split.Height / 6), 200, 60);
+    }
+
+    private static void FitSplitter(SplitContainer split, int size, int distance, int panel1Min, int panel2Min)
+    {
+        // A window too small for these sizes keeps whatever fits.
+        if (panel1Min + panel2Min + split.SplitterWidth > size)
+            return;
+
         try
         {
-            _content.SplitterDistance = Math.Max(_content.Panel1MinSize, Math.Min(610, _content.Width * 2 / 5));
-            _split.SplitterDistance = Math.Max(_split.Panel1MinSize, _split.Height - Math.Max(120, _split.Height / 6));
+            split.SplitterDistance = Math.Clamp(distance, panel1Min, size - panel2Min - split.SplitterWidth);
+            split.Panel1MinSize = panel1Min;
+            split.Panel2MinSize = panel2Min;
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
-            // The window is too small for these sizes; keep the defaults.
+            // Keep the defaults rather than fail to open.
         }
     }
 

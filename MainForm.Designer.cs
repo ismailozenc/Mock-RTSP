@@ -243,10 +243,8 @@ public sealed partial class MainForm
         _content.Orientation = Orientation.Vertical;
         _content.Panel1.Controls.Add(_filesLayout);
         _content.Panel1.Padding = new Padding(0, 0, 4, 0);
-        _content.Panel1MinSize = 200;
         _content.Panel2.Controls.Add(_camerasLayout);
         _content.Panel2.Padding = new Padding(4, 0, 0, 0);
-        _content.Panel2MinSize = 300;
 
         _log.Dock = DockStyle.Fill;
         _log.Font = new Font("Consolas", 9F);
@@ -258,9 +256,7 @@ public sealed partial class MainForm
         _split.FixedPanel = FixedPanel.Panel2;            // extra height goes to the cameras
         _split.Orientation = Orientation.Horizontal;
         _split.Panel1.Controls.Add(_content);
-        _split.Panel1MinSize = 200;
         _split.Panel2.Controls.Add(_log);
-        _split.Panel2MinSize = 60;
 
         // ================= Status bar =================
         _statusText.Text = "Server stopped";
