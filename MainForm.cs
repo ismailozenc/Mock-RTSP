@@ -28,6 +28,7 @@ public sealed partial class MainForm : Form, ICameraHost
     private readonly Dictionary<string, VideoFile> _videos = new(StringComparer.OrdinalIgnoreCase);
 
     private string _currentFolder = string.Empty;
+    private readonly HashSet<string> _playableFiles = new(StringComparer.OrdinalIgnoreCase);   // of the current folder
     private int _folderGeneration;                  // bumped per folder load, so late results of an old one are dropped
 
     public MainForm()
@@ -252,6 +253,7 @@ public sealed partial class MainForm : Form, ICameraHost
         _currentFolder = folder;
         int generation = ++_folderGeneration;
         RememberFolder(folder);
+        _playableFiles.Clear();
 
         var files = Directory.EnumerateFiles(folder)
             .Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
@@ -314,6 +316,7 @@ public sealed partial class MainForm : Form, ICameraHost
                 else
                 {
                     playable++;
+                    _playableFiles.Add(Path.GetFullPath(file));
                     ShowFileDetails(file, info, saved);
                 }
             }
@@ -395,8 +398,9 @@ public sealed partial class MainForm : Form, ICameraHost
     private void UpdateCameraColumn(ListViewItem item)
     {
         string file = (string)item.Tag!;
+        string full = Path.GetFullPath(file);
         item.SubItems[4].Text = string.Join(", ", _entries
-            .Where(e => string.Equals(e.Video.Path, Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
+            .Where(e => e.Playlist.Any(v => string.Equals(v.Path, full, StringComparison.OrdinalIgnoreCase)))
             .Select(e => e.StreamPath));
     }
 
@@ -489,26 +493,35 @@ public sealed partial class MainForm : Form, ICameraHost
 
     // ===================================================================== cameras
 
+    /// <summary>Adds a camera playing the selected video, or the selected videos in turn as a playlist.</summary>
     private void AddCamera()
     {
         if (_server is null)
             throw new InvalidOperationException("Start the server first.");
 
-        if (_files.SelectedItems.Count == 0)
+        var files = _files.SelectedItems.Cast<ListViewItem>()
+            .OrderBy(i => i.Index)
+            .Select(i => (string)i.Tag!)
+            .ToList();
+
+        if (files.Count == 0)
             throw new InvalidOperationException("Pick a video in the list first.");
 
-        string file = (string)_files.SelectedItems[0].Tag!;
         string path = CheckStreamPath(_streamPath.Text);
 
-        var video = OpenVideo(file);
+        var playlist = new List<VideoFile>();
         MockCamera camera;
         try
         {
-            camera = new MockCamera(_server, path, video.Path, RequireFfmpeg(), CameraOptions(video));
+            foreach (var file in files)
+                playlist.Add(OpenVideo(file));
+
+            camera = new MockCamera(_server, path, playlist.Select(v => v.Item).ToList(), RequireFfmpeg(), CameraOptions(playlist[0]));
         }
         catch
         {
-            ReleaseVideoIfUnused(video);
+            foreach (var video in playlist)
+                ReleaseVideoIfUnused(video);
             throw;
         }
 
@@ -518,9 +531,11 @@ public sealed partial class MainForm : Form, ICameraHost
             Log($"FFmpeg for '{path}' exited with code {code}. Stream is down."
                 + (output.Length > 0 ? Environment.NewLine + output : string.Empty));
         };
-        camera.SkipRanges = video.Skips;
 
-        var entry = new CameraEntry(path, video, camera);
+        foreach (var video in playlist)
+            camera.SetSkipRanges(video.Path, video.Skips);
+
+        var entry = new CameraEntry(path, playlist, camera);
         _entries.Add(entry);
         var panel = new CameraPanel(this, entry);
         _panels[entry] = panel;
@@ -528,9 +543,12 @@ public sealed partial class MainForm : Form, ICameraHost
         LayoutPanels();
         _cameras.ScrollControlIntoView(panel);
 
-        Log($"Added camera {camera.Url} playing {video.Name}.");
+        Log(playlist.Count == 1
+            ? $"Added camera {camera.Url} playing {playlist[0].Name}."
+            : $"Added camera {camera.Url} playing {playlist.Count} videos in turn: {string.Join(", ", playlist.Select(v => v.Name))}.");
         _streamPath.Text = NextStreamPath();
-        UpdateFileItem(video.Path);
+        foreach (var video in playlist)
+            UpdateFileItem(video.Path);
 
         // A camera is live as soon as it is added. If FFmpeg cannot start, it stays (stopped)
         // and the error is shown.
@@ -542,6 +560,62 @@ public sealed partial class MainForm : Form, ICameraHost
         finally
         {
             UpdateButtons();
+        }
+    }
+
+    /// <summary>
+    /// Changes the videos a camera plays. Videos new to the app are opened (their saved settings,
+    /// skips and motion data load). The camera restarts only if its first video, and with it the
+    /// picture size or quality, changed.
+    /// </summary>
+    public async Task EditPlaylistAsync(CameraEntry entry)
+    {
+        IReadOnlyList<string> files;
+        var available = _playableFiles.OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase).ToList();
+
+        using (var dialog = new PlaylistDialog(available, entry.Playlist.Select(v => v.Path), entry.StreamPath, VideoExtensions.OrderBy(e => e)))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+                return;
+
+            files = dialog.Files;
+        }
+
+        var old = entry.Playlist.ToList();
+        var oldOptions = CameraOptions(entry);
+        var oldFormat = entry.Camera.Format;
+
+        var playlist = new List<VideoFile>();
+        try
+        {
+            foreach (var file in files)
+                playlist.Add(OpenVideo(file));
+
+            entry.SetPlaylist(playlist);
+        }
+        catch
+        {
+            foreach (var video in playlist.Where(v => !old.Contains(v)))
+                ReleaseVideoIfUnused(video);
+            throw;
+        }
+
+        foreach (var video in old.Where(v => !playlist.Contains(v)))
+            ReleaseVideoIfUnused(video);
+
+        foreach (var file in old.Select(v => v.Path).Concat(playlist.Select(v => v.Path)).Distinct(StringComparer.OrdinalIgnoreCase))
+            UpdateFileItem(file);
+
+        Log($"'{entry.StreamPath}': playlist is now {string.Join(", ", playlist.Select(v => v.Name))}.");
+
+        // The first video sets the picture: restart only if that changed what is sent.
+        var newOptions = CameraOptions(entry);
+        bool sameStream = VideoSettings.From(oldOptions).SameStream(VideoSettings.From(newOptions))
+                          && entry.Camera.Format == oldFormat;
+        if (!sameStream)
+        {
+            Log($"'{entry.StreamPath}': the first video changed the picture size or quality, so the camera restarts.");
+            await RestartAsync(new[] { entry });
         }
     }
 
@@ -567,16 +641,20 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         foreach (var entry in CamerasOf(video))
-            entry.Camera.SkipRanges = video.Skips;
+            entry.Camera.SetSkipRanges(video.Path, video.Skips);
 
         UpdateFileItem(video.Path);
     }
 
-    private IEnumerable<CameraEntry> CamerasOf(VideoFile video) => _entries.Where(e => ReferenceEquals(e.Video, video)).ToList();
+    /// <summary>The cameras with this video anywhere in their playlist.</summary>
+    private IEnumerable<CameraEntry> CamerasOf(VideoFile video) => _entries.Where(e => e.Plays(video)).ToList();
+
+    /// <summary>The cameras whose picture size and quality come from this video: those that play it first.</summary>
+    private IEnumerable<CameraEntry> StreamCamerasOf(VideoFile video) => _entries.Where(e => ReferenceEquals(e.First, video)).ToList();
 
     private void ReleaseVideoIfUnused(VideoFile video)
     {
-        if (_entries.Any(e => ReferenceEquals(e.Video, video)))
+        if (_entries.Any(e => e.Plays(video)))
             return;
 
         _videos.Remove(video.Path);
@@ -660,13 +738,15 @@ public sealed partial class MainForm : Form, ICameraHost
             panel.Dispose();
         }
 
-        ReleaseVideoIfUnused(entry.Video);
-        UpdateFileItem(entry.Video.Path);
+        foreach (var video in entry.Playlist)
+        {
+            ReleaseVideoIfUnused(video);
+            UpdateFileItem(video.Path);
+        }
     }
 
-    public void ScanMotion(CameraEntry entry)
+    public void ScanMotion(VideoFile video)
     {
-        var video = entry.Video;
 
         if (video.IsScanning)
             throw new InvalidOperationException($"{video.Name} is being scanned already.");
@@ -791,17 +871,16 @@ public sealed partial class MainForm : Form, ICameraHost
         foreach (var video in _videos.Values.ToList())
         {
             if (video.HasOwnSettings)
-            {
-                if (publishingChanged)
-                    restart.AddRange(CamerasOf(video));
                 continue;
-            }
 
             ReapplyMotion(video, before, after);
 
-            if (!before.SameStream(after) || publishingChanged)
-                restart.AddRange(CamerasOf(video));
+            if (!before.SameStream(after))
+                restart.AddRange(StreamCamerasOf(video));
         }
+
+        if (publishingChanged)
+            restart.AddRange(_entries);
 
         await RestartAsync(restart);
 
@@ -811,9 +890,8 @@ public sealed partial class MainForm : Form, ICameraHost
     }
 
     /// <summary>One video's own settings, saved next to it. "Use defaults" in the dialog goes back to the defaults.</summary>
-    public async Task EditVideoSettingsAsync(CameraEntry entry)
+    public async Task EditVideoSettingsAsync(CameraEntry entry, VideoFile video)
     {
-        var video = entry.Video;
         var before = video.Effective(_options);
 
         var current = _options.Clone();
@@ -835,8 +913,14 @@ public sealed partial class MainForm : Form, ICameraHost
         video.SetOwnSettings(sameAsDefaults ? null : after);
         ReapplyMotion(video, before, after);
 
-        if (!before.SameStream(after))
-            await RestartAsync(CamerasOf(video));
+        if (before.SameStream(after))
+            return;
+
+        if (!ReferenceEquals(entry.First, video))
+            Log($"'{entry.StreamPath}': its picture size and quality come from its first video, {entry.First.Name}; "
+                + $"the new picture settings of {video.Name} apply to cameras that play it first.");
+
+        await RestartAsync(StreamCamerasOf(video));
     }
 
     /// <summary>
@@ -887,7 +971,7 @@ public sealed partial class MainForm : Form, ICameraHost
             bool hadVlc = VlcLauncher.IsOpen(entry.Vlc);
             bool wasOnline = entry.Camera.IsOnline;
 
-            entry.Camera.ApplyOptions(CameraOptions(entry.Video));
+            entry.Camera.ApplyOptions(CameraOptions(entry));
 
             if (!wasOnline)
             {
@@ -917,9 +1001,11 @@ public sealed partial class MainForm : Form, ICameraHost
     }
 
     /// <summary>
-    /// The options for a camera: the defaults, with the video's own settings over them, and the
+    /// The options for a camera: the defaults, with its first video's own settings over them, and the
     /// logins the running server was started with (changed logins are refused until it restarts).
     /// </summary>
+    private StreamOptions CameraOptions(CameraEntry entry) => CameraOptions(entry.First);
+
     private StreamOptions CameraOptions(VideoFile video)
     {
         var options = _options.Clone();

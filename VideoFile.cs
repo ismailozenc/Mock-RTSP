@@ -30,6 +30,9 @@ public sealed class VideoFile : IDisposable
 
     public double Duration => Info.DurationSeconds;
 
+    /// <summary>The video as an item for a camera's playlist.</summary>
+    public PlaylistItem Item => new(Path, Info);
+
     public IReadOnlyList<SkipRange> Skips => _skips;
 
     /// <summary>Movement over time, from the motion scan. Null until scanned.</summary>

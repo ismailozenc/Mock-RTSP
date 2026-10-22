@@ -1,6 +1,5 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 
 namespace MockRtsp;
 
@@ -202,8 +201,15 @@ public sealed class Timeline : Control
 
     private int RulerHeight => Font.Height + 6;
 
+    /// <summary>Height of the green/red strip along the bottom: what plays and what is skipped.</summary>
+    private const int PlayStripHeight = 9;
+
+    /// <summary>The bar with the skip blocks and the motion graph, above the play strip.</summary>
     private Rectangle BarArea =>
-        new(0, RulerHeight, ViewWidth, Math.Max(1, ClientSize.Height - RulerHeight - _scroll.Height));
+        new(0, RulerHeight, ViewWidth, Math.Max(1, ClientSize.Height - RulerHeight - _scroll.Height - PlayStripHeight));
+
+    private Rectangle PlayStripArea =>
+        new(0, RulerHeight + BarArea.Height, ViewWidth, PlayStripHeight);
 
     private int TimeToX(double seconds) => (int)Math.Round((seconds - _scrollSeconds) * _pixelsPerSecond);
 
@@ -290,6 +296,7 @@ public sealed class Timeline : Control
             DrawBar(g);
             DrawSkips(g);
             DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));   // on top, so movement inside a skip shows too
+            DrawPlayStrip(g);
             DrawRuler(g);
             DrawStatus(g);
 
@@ -350,6 +357,38 @@ public sealed class Timeline : Control
 
             int h = Math.Max(1, (int)Math.Round(Math.Min(1, percent / 5) * height));
             g.DrawLine(percent >= _motionThreshold ? moving : quiet, x, bottom, x, bottom - h);
+        }
+    }
+
+    /// <summary>
+    /// Under the motion graph: green where the video plays, red where it is skipped. When the
+    /// skips would leave nothing to play they are ignored by the camera, so all of it is green.
+    /// </summary>
+    private void DrawPlayStrip(Graphics g)
+    {
+        var strip = PlayStripArea;
+        int startX = Clamp(TimeToX(0), 0, ViewWidth);
+        int endX = Clamp(TimeToX(_duration), 0, ViewWidth);
+        var rect = new Rectangle(startX, strip.Top + 1, Math.Max(0, endX - startX), strip.Height - 2);
+
+        using (var back = new SolidBrush(Color.FromArgb(20, 20, 22)))
+            g.FillRectangle(back, 0, strip.Top, ViewWidth, strip.Height);
+
+        using (var plays = new SolidBrush(Color.FromArgb(46, 160, 67)))
+            g.FillRectangle(plays, rect);
+
+        if (!MockRtsp.SkipRanges.LeavesSomethingToPlay(_skips, _duration))
+            return;
+
+        using var skipped = new SolidBrush(Color.FromArgb(205, 45, 45));
+        foreach (var range in _skips)
+        {
+            int x1 = Clamp(TimeToX(range.Start), 0, ViewWidth);
+            int x2 = Clamp(TimeToX(range.End), 0, ViewWidth);
+            if (x2 > x1)
+                g.FillRectangle(skipped, x1, rect.Top, x2 - x1, rect.Height);
+            else if (x2 == x1 && x1 < ViewWidth)
+                g.FillRectangle(skipped, x1, rect.Top, 1, rect.Height);      // too short for a pixel at this zoom, still shown
         }
     }
 
@@ -523,7 +562,7 @@ public sealed class Timeline : Control
             _preview.Hide();
     }
 
-    /// <summary>The preview frame for a moment, turned into a bitmap the first time it is needed.</summary>
+    /// <summary>The preview frame for a moment, decoded from its JPEG the first time it is needed.</summary>
     private Bitmap? BitmapFor(double seconds)
     {
         if (_strip is null)
@@ -533,32 +572,35 @@ public sealed class Timeline : Control
         if (_bitmaps.TryGetValue(index, out var cached))
             return cached;
 
-        var frame = _strip.Get(index);
-        if (frame is null)
+        var jpeg = _strip.GetJpeg(index);
+        if (jpeg is null)
             return null;
 
-        var bitmap = ToBitmap(frame, _strip.Width, _strip.Height);
-        _bitmaps[index] = bitmap;
+        // Keep memory in check on long videos: decoding again is quick.
+        if (_bitmaps.Count >= MaxCachedBitmaps)
+            ClearBitmaps();
+
+        var bitmap = Decode(jpeg);
+        if (bitmap is not null)
+            _bitmaps[index] = bitmap;
         return bitmap;
     }
 
-    private static Bitmap ToBitmap(byte[] bgr, int width, int height)
+    private const int MaxCachedBitmaps = 150;
+
+    private static Bitmap? Decode(byte[] jpeg)
     {
-        var bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-        var data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
         try
         {
-            // Bitmap rows are padded to 4 bytes; FFmpeg's are not, so copy row by row.
-            int row = width * 3;
-            for (int y = 0; y < height; y++)
-                Marshal.Copy(bgr, y * row, data.Scan0 + y * data.Stride, row);
+            // GDI+ needs the stream for as long as an image made from it lives, so copy it out.
+            using var stream = new MemoryStream(jpeg, writable: false);
+            using var image = Image.FromStream(stream);
+            return new Bitmap(image);
         }
-        finally
+        catch (ArgumentException)
         {
-            bitmap.UnlockBits(data);
+            return null;                        // a damaged picture: no preview for that moment
         }
-
-        return bitmap;
     }
 
     private void ClearBitmaps()

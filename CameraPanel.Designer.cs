@@ -13,6 +13,7 @@ public sealed partial class CameraPanel
     private Label _details = null!;
     private Button _startStop = null!;
     private Button _openVlc = null!;
+    private Button _playlist = null!;
     private Button _settings = null!;
     private Button _scanMotion = null!;
     private Label _lblOutage = null!;
@@ -20,6 +21,9 @@ public sealed partial class CameraPanel
     private Button _outage = null!;
     private Button _remove = null!;
     private FlowLayoutPanel _player = null!;
+    private ComboBox _video = null!;
+    private Button _rewind = null!;
+    private Button _next = null!;
     private Button _back10 = null!;
     private Button _playPause = null!;
     private Button _forward10 = null!;
@@ -52,6 +56,7 @@ public sealed partial class CameraPanel
         _details = new Label();
         _startStop = new Button();
         _openVlc = new Button();
+        _playlist = new Button();
         _settings = new Button();
         _scanMotion = new Button();
         _lblOutage = new Label();
@@ -59,6 +64,9 @@ public sealed partial class CameraPanel
         _outage = new Button();
         _remove = new Button();
         _player = new FlowLayoutPanel();
+        _video = new ComboBox();
+        _rewind = new Button();
+        _next = new Button();
         _back10 = new Button();
         _playPause = new Button();
         _forward10 = new Button();
@@ -100,6 +108,8 @@ public sealed partial class CameraPanel
         _startStop.Text = "Stop";
         _openVlc.Size = new Size(96, 28);
         _openVlc.Text = "Open in VLC";
+        _playlist.Size = new Size(76, 28);
+        _playlist.Text = "Playlist...";
         _settings.Size = new Size(110, 28);
         _settings.Text = "Video settings...";
         _scanMotion.Size = new Size(110, 28);
@@ -125,9 +135,16 @@ public sealed partial class CameraPanel
         _header.Dock = DockStyle.Fill;
         _header.Margin = new Padding(0);
         _header.WrapContents = true;
-        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _settings, _scanMotion, _lblOutage, _outageSeconds, _outage, _remove });
+        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _lblOutage, _outageSeconds, _outage, _remove });
 
-        // ================= Player: pause, rewind, forward, speed, skips, zoom =================
+        // ================= Player: video, rewind, pause, back, forward, next, speed, skips, zoom =================
+        _video.DropDownStyle = ComboBoxStyle.DropDownList;
+        _video.Margin = new Padding(0, 4, 8, 0);
+        _video.Width = 150;
+        _rewind.Size = new Size(60, 28);
+        _rewind.Text = "Rewind";
+        _next.Size = new Size(60, 28);
+        _next.Text = "Next";
         _back10.Size = new Size(60, 28);
         _back10.Text = "« 10 s";
         _playPause.Size = new Size(60, 28);
@@ -167,11 +184,11 @@ public sealed partial class CameraPanel
         _player.Dock = DockStyle.Fill;
         _player.Margin = new Padding(0, 2, 0, 0);
         _player.WrapContents = true;
-        _player.Controls.AddRange(new Control[] { _back10, _playPause, _forward10, _time, _lblSpeed, _speed, _skipStart, _skipEnd, _zoomOut, _zoomIn, _zoomFit });
+        _player.Controls.AddRange(new Control[] { _video, _rewind, _back10, _playPause, _forward10, _next, _time, _lblSpeed, _speed, _skipStart, _skipEnd, _zoomOut, _zoomIn, _zoomFit });
 
         // ================= Timeline: hover to preview, click to jump, red = skipped =================
         _timeline.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        _timeline.Height = 74;
+        _timeline.Height = 86;
         _timeline.Margin = new Padding(0, 4, 0, 0);
 
         // ================= Layout =================
@@ -189,6 +206,10 @@ public sealed partial class CameraPanel
         // ================= Events =================
         _startStop.Click += new EventHandler(OnStartStopClick);
         _openVlc.Click += new EventHandler(OnOpenVlcClick);
+        _playlist.Click += new EventHandler(OnPlaylistClick);
+        _video.SelectedIndexChanged += new EventHandler(OnVideoPicked);
+        _rewind.Click += new EventHandler(OnRewindClick);
+        _next.Click += new EventHandler(OnNextClick);
         _settings.Click += new EventHandler(OnSettingsClick);
         _scanMotion.Click += new EventHandler(OnScanMotionClick);
         _outage.Click += new EventHandler(OnOutageClick);

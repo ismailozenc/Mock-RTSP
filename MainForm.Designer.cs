@@ -165,7 +165,7 @@ public sealed partial class MainForm
         _lblFiles.AutoSize = true;
         _lblFiles.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _lblFiles.Margin = new Padding(0, 2, 0, 4);
-        _lblFiles.Text = "Videos (double-click to add as a camera)";
+        _lblFiles.Text = "Videos (double-click to add as a camera; select several for a playlist)";
 
         _colName.Text = "Video";
         _colName.Width = 140;
@@ -181,7 +181,7 @@ public sealed partial class MainForm
         _files.Dock = DockStyle.Fill;
         _files.FullRowSelect = true;
         _files.HideSelection = false;
-        _files.MultiSelect = false;
+        _files.MultiSelect = true;
         _files.View = View.Details;
 
         _lblStreamPath.AutoSize = true;

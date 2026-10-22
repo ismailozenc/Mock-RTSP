@@ -135,7 +135,7 @@ public sealed class StreamOptions
 
     /// <summary>
     /// Decoder stage: reads the file from a position and writes raw frames, already scaled to the
-    /// output size and resampled to the output frame rate, to standard output.
+    /// output size (letterboxed if its shape differs) and resampled to the output frame rate, to standard output.
     /// </summary>
     public static List<string> DecoderArguments(string source, double startSeconds, VideoFormat format)
     {
@@ -150,12 +150,24 @@ public sealed class StreamOptions
         {
             "-i", source,
             "-map", "0:v:0", "-an", "-sn", "-dn",
-            "-vf", $"scale={format.Width.ToString(inv)}:{format.Height.ToString(inv)},fps={format.FrameRate.ToString(inv)}",
+            "-vf", ScaleFilter(format),
             "-pix_fmt", "yuv420p",
             "-f", "rawvideo", "pipe:1"
         });
 
         return args;
+    }
+
+    /// <summary>
+    /// Fits a video into the output size without stretching it: scaled to fit, centred, with
+    /// black bars where its shape differs (a playlist can mix sizes), at the output frame rate.
+    /// </summary>
+    public static string ScaleFilter(VideoFormat format)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        string w = format.Width.ToString(inv), h = format.Height.ToString(inv);
+        return $"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+               + $"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={format.FrameRate.ToString(inv)}";
     }
 
     /// <summary>
