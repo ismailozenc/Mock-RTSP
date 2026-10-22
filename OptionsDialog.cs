@@ -2,11 +2,16 @@ namespace MockRtsp;
 
 /// <summary>
 /// Edits a copy of StreamOptions. Result is only updated when OK is clicked with valid values.
+/// Two uses:
+///   main settings   defaults for videos, plus the server
+///   one video       only the settings a video can have of its own; "Use defaults" fills in
+///                   the main defaults
 /// The layout lives in OptionsDialog.Designer.cs.
 /// </summary>
 public sealed partial class OptionsDialog : Form
 {
     private readonly StreamOptions _working;
+    private readonly StreamOptions? _defaults;      // set for one video; what "Use defaults" loads
 
     public StreamOptions Result { get; private set; }
 
@@ -15,26 +20,49 @@ public sealed partial class OptionsDialog : Form
     {
     }
 
-    public OptionsDialog(StreamOptions current)
+    /// <summary>The main settings: defaults for videos, and the server.</summary>
+    public OptionsDialog(StreamOptions current) : this(current, null, null)
+    {
+    }
+
+    /// <summary>
+    /// One video's settings when videoName is given: current holds the settings in force for it,
+    /// defaults the main defaults.
+    /// </summary>
+    public OptionsDialog(StreamOptions current, string? videoName, StreamOptions? defaults)
     {
         InitializeComponent();
 
         _working = current.Clone();
+        _defaults = defaults?.Clone();
         Result = _working;
 
-        _reEncode.CheckedChanged += new EventHandler(OnReEncodeChanged);
-
-        // Changing any encoding setting turns re-encoding on, so the change is never silently ignored.
-        _bitrate.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _keyframe.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _width.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _height.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _frameRate.ValueChanged += new EventHandler(OnEncodeSettingChanged);
-        _noBFrames.CheckedChanged += new EventHandler(OnEncodeSettingChanged);
+        if (videoName is not null)
+            ShowAsVideoSettings(videoName);
 
         FillComboBoxes();
-        LoadFromOptions(_working);
-        UpdateEnabled();
+        LoadValues(_working);
+    }
+
+    /// <summary>Only the settings a single video can have: no server tab, no app-wide options.</summary>
+    private void ShowAsVideoSettings(string videoName)
+    {
+        Text = "Settings for " + videoName;
+        _tabs.TabPages.Remove(_tabMtx);
+        _tabFfmpeg.Text = videoName;
+        _ffIntro.Text = $"Settings for this video only, saved next to it in {videoName}.mockrtsp.json. "
+                        + "Cameras playing it restart with the new settings, keeping position, pause and speed. "
+                        + "New motion settings pick skips again from the saved scan, without scanning again.";
+        _reset.Text = "Use defaults";
+
+        // App-wide options stay in the main settings.
+        _autoScan.Visible = false;
+        _hdrPublish.Visible = false;
+        _lblPublishTransport.Visible = false;
+        _publishTransport.Visible = false;
+        _lblFfmpegLog.Visible = false;
+        _ffmpegLog.Visible = false;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height - 90);
     }
 
     private void FillComboBoxes()
@@ -45,28 +73,13 @@ public sealed partial class OptionsDialog : Form
         _transports.Items.AddRange(new object[] { "TCP and UDP", "TCP only", "UDP only" });
     }
 
-    private bool _loading;
-
-    /// <summary>Copies settings into the controls without treating the copy as a user change.</summary>
-    private void LoadFromOptions(StreamOptions o)
-    {
-        _loading = true;
-        try
-        {
-            LoadValues(o);
-        }
-        finally
-        {
-            _loading = false;
-        }
-    }
-
     private void LoadValues(StreamOptions o)
     {
         _loop.Checked = o.Loop;
-        _realTime.Checked = o.RealTime;
-        _dropAudio.Checked = o.DropAudio;
-        _reEncode.Checked = o.ReEncode;
+        _autoScan.Checked = o.AutoScanMotion;
+        SetValue(_motionThreshold, o.MotionThresholdPercent);
+        SetValue(_minStill, o.MinStillSeconds);
+        SetValue(_motionPadding, o.MotionPaddingSeconds);
         SetValue(_bitrate, o.BitrateKbps);
         SetValue(_keyframe, o.KeyframeInterval);
         SetValue(_width, o.Width);
@@ -90,22 +103,27 @@ public sealed partial class OptionsDialog : Form
     private static void SetValue(NumericUpDown box, int value) =>
         box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, value));
 
+    private static void SetValue(NumericUpDown box, double value) =>
+        box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, (decimal)value));
+
     private void ApplyToOptions()
     {
-        // Commit typed numbers first. Committing a changed encoding value ticks Re-encode,
-        // so this must happen before Re-encode is read below.
         CommitTyped(_bitrate);
         CommitTyped(_keyframe);
         CommitTyped(_width);
         CommitTyped(_height);
         CommitTyped(_frameRate);
         CommitTyped(_readTimeout);
+        CommitTyped(_motionThreshold);
+        CommitTyped(_minStill);
+        CommitTyped(_motionPadding);
         CommitTyped(_writeTimeout);
 
         _working.Loop = _loop.Checked;
-        _working.RealTime = _realTime.Checked;
-        _working.DropAudio = _dropAudio.Checked;
-        _working.ReEncode = _reEncode.Checked;
+        _working.AutoScanMotion = _autoScan.Checked;
+        _working.MotionThresholdPercent = (double)_motionThreshold.Value;
+        _working.MinStillSeconds = (double)_minStill.Value;
+        _working.MotionPaddingSeconds = (double)_motionPadding.Value;
         _working.BitrateKbps = (int)_bitrate.Value;
         _working.KeyframeInterval = (int)_keyframe.Value;
         _working.Width = (int)_width.Value;
@@ -131,34 +149,16 @@ public sealed partial class OptionsDialog : Form
     /// </summary>
     private static void CommitTyped(NumericUpDown box)
     {
-        if (decimal.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Integer | System.Globalization.NumberStyles.AllowThousands,
+        if (decimal.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Number,
                 System.Globalization.CultureInfo.CurrentCulture, out decimal typed))
         {
             box.Value = Math.Min(box.Maximum, Math.Max(box.Minimum, typed));
         }
     }
 
-    private void UpdateEnabled()
-    {
-        // The encoding settings stay editable. Changing one turns re-encoding on (see OnEncodeSettingChanged).
-    }
+    // ---- Event handlers (wired in OptionsDialog.Designer.cs) ----
 
-    // ---- Event handlers (wired in OptionsDialog.Designer.cs and the constructor) ----
-
-    private void OnReEncodeChanged(object? sender, EventArgs e) => UpdateEnabled();
-
-    /// <summary>A user-made change to an encoding setting implies re-encoding, so turn it on.</summary>
-    private void OnEncodeSettingChanged(object? sender, EventArgs e)
-    {
-        if (!_loading && !_reEncode.Checked)
-            _reEncode.Checked = true;
-    }
-
-    private void OnResetClick(object? sender, EventArgs e)
-    {
-        LoadFromOptions(new StreamOptions());
-        UpdateEnabled();
-    }
+    private void OnResetClick(object? sender, EventArgs e) => LoadValues(_defaults ?? new StreamOptions());
 
     private void OnOkClick(object? sender, EventArgs e)
     {
@@ -170,7 +170,7 @@ public sealed partial class OptionsDialog : Form
             if (problems.Count > 0)
             {
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems),
-                    "Check the options", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "Check the settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;                                 // stay open so the user can fix it
             }
 
