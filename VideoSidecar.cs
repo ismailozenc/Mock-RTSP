@@ -9,12 +9,13 @@ public sealed record SavedVideo(
     MotionProfile? Motion,
     VideoSettings? Settings,
     bool FileExists,
-    bool FromOldFile)
+    bool FromOldFile,
+    List<PlateMark> Plates)
 {
     /// <summary>True once the video has been scanned for motion, so it is not scanned again on load.</summary>
     public bool Scanned => Motion is not null;
 
-    public static SavedVideo None => new(new List<SkipRange>(), null, null, false, false);
+    public static SavedVideo None => new(new List<SkipRange>(), null, null, false, false, new List<PlateMark>());
 }
 
 /// <summary>
@@ -24,6 +25,7 @@ public sealed record SavedVideo(
 ///   skips     the parts the camera jumps over
 ///   motion    how much moves, 5 times a second, from the motion scan; kept so changing the
 ///             motion settings picks new skips straight away, without scanning again
+///   plates    ground truth: the licence plates visible in the video, and when
 /// Copy the file along with the video and all of this comes with it.
 /// Files from the previous version ("&lt;video file&gt;.skips.json") are read too, and replaced
 /// by the new file the first time it is saved.
@@ -68,7 +70,11 @@ public static class VideoSidecar
             if (file?.Motion is { Levels.Length: > 0, IntervalSeconds: > 0 } m)
                 motion = new MotionProfile(m.IntervalSeconds, Convert.FromBase64String(m.Levels));
 
-            return new SavedVideo(SkipRanges.Normalize(ranges, durationSeconds), motion, file?.Settings, true, fromOld);
+            var plates = (file?.Plates ?? new List<PlateEntry>())
+                .Select(p => new PlateMark(p.Time, p.Plate ?? string.Empty, p.X, p.Y, p.Width, p.Height));
+
+            return new SavedVideo(SkipRanges.Normalize(ranges, durationSeconds), motion, file?.Settings, true, fromOld,
+                PlateMarks.Normalize(plates, durationSeconds));
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
@@ -81,11 +87,13 @@ public static class VideoSidecar
     /// crash cannot leave half a file. With nothing to keep, the file is deleted. A file from
     /// the previous version is removed once its content is in the new file.
     /// </summary>
-    public static void Save(string videoPath, IReadOnlyList<SkipRange> ranges, MotionProfile? motion, VideoSettings? settings)
+    public static void Save(string videoPath, IReadOnlyList<SkipRange> ranges, MotionProfile? motion, VideoSettings? settings,
+        IReadOnlyList<PlateMark>? plates = null)
     {
         string path = PathFor(videoPath);
+        plates ??= Array.Empty<PlateMark>();
 
-        if (ranges.Count == 0 && motion is null && settings is null)
+        if (ranges.Count == 0 && motion is null && settings is null && plates.Count == 0)
         {
             if (File.Exists(path))
                 File.Delete(path);
@@ -97,6 +105,15 @@ public static class VideoSidecar
                 Video = Path.GetFileName(videoPath),
                 Settings = settings,
                 Skips = ranges.Select(r => new Entry { Start = Math.Round(r.Start, 3), End = Math.Round(r.End, 3) }).ToList(),
+                Plates = plates.Count == 0 ? null : plates.Select(p => new PlateEntry
+                {
+                    Time = Math.Round(p.Time, 3),
+                    Plate = p.Plate,
+                    X = p.X,
+                    Y = p.Y,
+                    Width = p.Width,
+                    Height = p.Height
+                }).ToList(),
                 Motion = motion is null ? null : new MotionEntry
                 {
                     IntervalSeconds = motion.IntervalSeconds,
@@ -124,6 +141,18 @@ public static class VideoSidecar
         public VideoSettings? Settings { get; set; }
         public List<Entry> Skips { get; set; } = new();
         public MotionEntry? Motion { get; set; }
+        public List<PlateEntry>? Plates { get; set; }
+    }
+
+    /// <summary>A ground-truth plate; the region (fractions of the picture) is left out when not given.</summary>
+    private sealed class PlateEntry
+    {
+        public double Time { get; set; }
+        public string? Plate { get; set; }
+        public double? X { get; set; }
+        public double? Y { get; set; }
+        public double? Width { get; set; }
+        public double? Height { get; set; }
     }
 
     private sealed class Entry

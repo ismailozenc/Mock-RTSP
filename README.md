@@ -2,9 +2,15 @@
 
 A Windows Forms app that acts as a set of mock RTSP cameras for testing. It runs [MediaMTX](https://github.com/bluenviron/mediamtx) as the RTSP server and uses FFmpeg to stream video files into it as named camera paths (Hikvision-style `Streaming/Channels/101` by default), so an RTSP viewer or an ALPR pipeline can be developed and tested without real cameras.
 
-Beyond looping a file, each camera behaves like a controllable camera: pause, rewind, seek, speed, outages, playlists of several videos, and skip ranges (picked automatically from a motion scan) so only the parts with movement are streamed. The whole setup can be saved as a project and reopened.
+Beyond looping a file, each camera behaves like a controllable camera:
+- pause, rewind, seek, speed and simulated outages
+- playlists of several videos
+- skip ranges, picked automatically from a motion scan, so only the parts with movement are streamed
+- a substream (`.../102` next to `.../101`), like a real camera
 
-Contents: [Requirements](#requirements) · [Using the app](#using-the-app) · [For developers: how the code works](#for-developers-how-the-code-works) · [File reference](#file-reference) · [Changes timeline](#changes-timeline) · [Where we left off](#where-we-left-off)
+For ALPR testing, each video can carry a ground-truth list of the plates in it. The app logs the moment each plate is actually streamed and scores your ALPR results against that log (hit rate, misses, latency). Each camera shows live stats (frame rate, bitrate, viewers). The whole setup can be saved as a project and reopened.
+
+Contents: [Requirements](#requirements) · [Using the app](#using-the-app) · [Ground truth for ALPR testing](#ground-truth-for-alpr-testing) · [For developers: how the code works](#for-developers-how-the-code-works) · [File reference](#file-reference) · [Changes timeline](#changes-timeline) · [Where we left off](#where-we-left-off)
 
 ## Requirements
 
@@ -27,12 +33,62 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 2. Choose your **Video folder** (Browse, or pick a recent one). The list shows the playable videos in it with their length, picture size, skips and which cameras use them; other files are left out.
 3. **Double-click a video** (or select it and click **Add camera**) to add it as a camera. Select several videos (Ctrl or Shift + click) to add one camera that plays them in turn. The stream path is filled in for you (Streaming/Channels/101, 201, 301 and so on) and can be changed first. The same video can be used by more than one camera.
 4. Every camera gets its own panel on the right, with everything for that camera, so nothing needs selecting first:
-   - **Start/Stop**, **Open in VLC**, **Playlist...**, **Video settings...**, **Scan motion**, **Outage** with **Simulate**, and **Remove**.
+   - **Start/Stop**, **Open in VLC**, **Playlist...**, **Video settings...**, **Scan motion**, **Plates...**, **Outage** with **Simulate**, and **Remove**.
+   - Live stats at the end of the player row: frames per second actually sent, bitrate and viewers, for the main stream and the substream.
    - **Rewind** (back to the start of the video; pressed again at the start, to the video before), **« 10 s**, **Pause/Play**, **10 s »**, **Speed** (0.25x to 4x), **Skip start**/**Skip end**, and **-**, **+**, **Fit** to zoom its timeline. A camera with several videos also has a list to pick the video and **Next**.
    - Its own **timeline** of the video playing now: hover for a preview frame, click or drag to jump, drag the white edges of a skipped part (dark red), Shift + drag to add one, right-click to delete. Ctrl + wheel zooms. The graph shows how much of the picture moves: faint below the threshold (dashed line), solid green above it, and as a red hatched grid in skipped parts, so you can see the movement that is cut. Under it a strip shows what plays (green) and what is skipped (red).
    Viewers stay connected through pause, seek and speed changes.
 
-Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
+Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`, or the substream `rtsp://127.0.0.1:8554/Streaming/Channels/102`.
+
+### Substreams
+
+Like a real camera, every camera also sends a smaller second stream: `Streaming/Channels/102` next to `.../101` (a path that does not end in 01 gets `_sub` added). Real ALPR setups often detect vehicles on the substream and read plates on the main stream. Both come from the same FFmpeg process, so they always show the same moment.
+
+The substream is set in **Settings > Defaults for videos > Substream**. It is on by default, 640 wide (the height keeps the main stream's shape; it is never larger than the main stream), at the main frame rate, with the encoder's default bitrate. Turn it off to send the main stream only. Changing these settings restarts every camera. A new camera's path is refused if it would land on another camera's substream, or the other way round.
+
+### Live stats
+
+Each camera panel shows, about once a second:
+- **fps**: the frames per second actually sent, measured by the camera itself
+- **Mbit/s or kbit/s**: what the camera publishes, from MediaMTX's byte count
+- **viewers**: how many are watching, separately for the main stream and the substream
+
+The numbers come from MediaMTX's control API, which the app turns on for this computer only, on a free port.
+
+## Ground truth for ALPR testing
+
+**Plates...** on a camera lists the licence plates visible in the video it is playing, and when:
+- **time**: seconds (83.4) or minutes and seconds (1:23.4)
+- **plate**: the plate text
+- **region** (optional): where the plate is, as x, y, width and height fractions (0 to 1) of the video's picture
+
+**Add at playhead** puts the camera's current moment into a new row. **Import CSV...** and **Export CSV...** use a simple `time,plate,x,y,width,height` file. The plates are saved with the video in its `.mockrtsp.json`, and shown on the timeline as yellow flags with the plate text. A plate inside a skipped part is shown grey: it is never streamed, so it is never expected.
+
+**The ground-truth log.** When a camera hands the frame at a plate's time to the encoder, the app writes a line to the log and to the window's log. The log is one CSV file per day, `ground-truth-YYYY-MM-DD.csv`, in `Documents\MockRtsp\ground-truth` (change the folder in **Settings > Server**). Each line holds:
+- the UTC and local time it was streamed
+- the camera path and its substream path
+- the video and the time in the video
+- the plate
+- its region as fractions of the video's picture, and in pixels of the main stream (after scaling and black bars)
+
+A plate is logged every time it is streamed: on every loop, and again after seeking back over it. Plates passed over by a seek, and plates in skipped parts, are not logged.
+
+**Scoring.** **Score ALPR results...** compares the log with what your ALPR system read. Give it a CSV of your system's results with a header line containing:
+- a time column: `time`, `timestamp`, `utc`, `utc_time`, `datetime` or `date`. ISO 8601 with Z or an offset (without one it is local time), or Unix time in seconds or milliseconds.
+- a plate column: `plate`, `plate_text`, `text`, `number` or `license_plate`
+- optionally a camera column: `camera`, `camera_path`, `path`, `channel`, `stream` or `url`. It matches when it ends with the camera's path or its substream's, so `101`, `Streaming/Channels/102` and a full URL all work.
+
+A streamed plate counts as **read** when the results have the same plate (letters and digits only, any case) from that camera, from 2 s before to 10 s after it was streamed (both adjustable). The window ends early if the same plate is streamed again. Further reads in the window are repeats, not errors.
+
+The report shows:
+- plates streamed, read correctly (hit rate), read **one character off**, and missed
+- reads of plates that were not streamed
+- latency from streamed to first correct read: average, median, 95th percentile, fastest and slowest
+- per-camera results when there are several cameras
+- a list of the plates not read correctly
+
+**Save report (CSV)...** writes one line per streamed plate with its outcome, what it was read as, and the latency in ms.
 
 ### Projects: keep the whole setup
 
@@ -57,7 +113,8 @@ Everything about a video is kept in a file next to it, `<video file>.mockrtsp.js
 
 - its own settings, if it has any,
 - its skip ranges,
-- its motion data: how much of the picture moves, 5 times a second, from the motion scan.
+- its motion data: how much of the picture moves, 5 times a second, from the motion scan,
+- its ground-truth plates.
 
 The preview pictures for the timeline are kept next to it too, in `<video file>.mockrtsp.previews`: small JPEG pictures (a few KB each) with a table of where each one is, so they load at once and any moment can be shown straight away. They are made again if the video file changes. Deleting the file is safe; it is made again the next time.
 
@@ -112,8 +169,11 @@ MainForm  (window, owns everything below; implements ICameraHost for the panels)
  ├─ CameraEntry (per camera) stream path + playlist of VideoFiles + MockCamera + VLC process
  │    ├─ MockCamera          decoder FFmpeg -> pump thread -> encoder FFmpeg -> MediaMTX
  │    └─ CameraPanel         the camera's controls and its Timeline
+ ├─ GroundTruthLog          ground-truth-YYYY-MM-DD.csv: one line per plate streamed (from MockCamera.PlateStreamed)
+ ├─ LiveStats               bitrates and viewers from MediaMtxServer.GetPathStatsAsync, polled every second
  ├─ OptionsStore            %APPDATA%\MockRtsp\options.json (defaults, server, remembered folders)
  └─ ProjectFile             *.mockrtsp-project: the whole setup
+PlatesDialog (ground truth per video) · ScoreDialog + PlateScorer (ALPR results vs the log)
 ```
 
 ### The camera pipeline (MockCamera)
@@ -121,6 +181,9 @@ MainForm  (window, owns everything below; implements ICameraHost for the panels)
 - **Decoder**: `ffmpeg -ss <pos> -i <file> -vf scale+pad+fps -pix_fmt yuv420p -f rawvideo pipe:1`. Outputs raw frames already scaled (letterboxed if the shape differs) to the camera's format and resampled to its frame rate. It is killed and restarted for every seek, and for the next video of the playlist.
 - **Pump thread**: writes exactly one frame per frame interval to the encoder, using a Stopwatch schedule and `timeBeginPeriod(1)` on Windows. Paused, it writes the last frame again. Speed works with an accumulator: at 2x it reads two source frames per output frame. Skip ranges are checked on every frame *before* it is shown (`Show`), so a skipped frame is never sent and viewers see a clean cut.
 - **Encoder**: `ffmpeg -f rawvideo -i pipe:0 -c:v libx264 -preset veryfast -tune zerolatency -force_key_frames expr:gte(t,n_forced*1) -f rtsp`. It runs for as long as the camera is on, so viewers stay connected through pause, seek, speed changes and playlist changes. A keyframe every second lets a new viewer start within about a second.
+  - With the substream on, the same process has two outputs: `-filter_complex [0:v]split=2[main][sub];[sub]scale=W:H,fps=R[subv]` maps `[main]` to `.../101` and `[subv]` to `.../102`. The substream keyframe interval is scaled to its frame rate. If either publish fails, FFmpeg exits and the camera reports it as usual.
+- **Ground truth**: when `Show` accepts a frame, `CollectPlates` notes the plates between the previous frame shown and this one. Playing on means a gap under 2 s in the same video; after a jump, only a plate on this very frame counts. Once the frame has been written to the encoder, `RaisePlates` raises `PlateStreamed` with the UTC time, on the pump thread. MainForm writes it to the GroundTruthLog.
+- **Measured frame rate**: the pump counts frames written each second (`MeasuredFrameRate`).
 - **Restarts**: settings that change the stream (size, frame rate, bitrate, keyframes, B-frames, publish transport) need `ApplyOptions`. That stops and starts the camera, which disconnects viewers like a real camera would, keeping position, pause and speed. VLC windows opened by the app are reopened.
 - **Format**: the camera's size and rate come from `StreamOptions.OutputFormat(first video's VideoInfo)`. `CameraOptions(entry)` in MainForm = defaults, then the first video's own settings over them, then the logins the running server was started with.
 - **Locks**: `_gate` guards processes and `_options`; `_control` guards player state (playlist, item, position, seek target, pause, speed). The only allowed nesting is `_gate` then `_control` (in `Start` via `Format`). Never take `_gate` while holding `_control`, which is why `_loop` is a volatile copy of `_options.Loop`.
@@ -137,10 +200,11 @@ MainForm  (window, owns everything below; implements ICameraHost for the panels)
 |---|---|---|---|
 | `options.json` | `%APPDATA%\MockRtsp\` | OptionsStore | Defaults for videos, server settings (logins in plain text), last folder, recent folders, last project, reopen-at-startup flag |
 | `errors.log` | `%LOCALAPPDATA%\MockRtsp\` | ErrorReporter | Unexpected exceptions with context |
-| `<video>.mockrtsp.json` | next to each video | VideoSidecar | Video's own settings (or none), skip ranges, motion data (base64). Atomic save. Deleted when there is nothing to keep. Replaces the older `<video>.skips.json`, which is read and deleted on the first save |
+| `<video>.mockrtsp.json` | next to each video | VideoSidecar | Video's own settings (or none), skip ranges, motion data (base64), ground-truth plates (time, plate, optional region). Atomic save. Deleted when there is nothing to keep. Replaces the older `<video>.skips.json`, which is read and deleted on the first save |
 | `<video>.mockrtsp.previews` | next to each video | ThumbnailStrip | Binary: `"MRTPREV1"`, video size and last-write ticks, width, height, interval, count, one int32 length per picture, then the JPEGs. Rebuilt if the video changed or the file is damaged |
 | `*.mockrtsp-project` | where the user saves it | ProjectFile | JSON: port, StartServer, Settings (StreamOptions without the remembered fields), VideoFolder, Cameras[] (StreamPath, Videos, Running, Paused, Speed, Video, PositionSeconds). Paths are relative to the project folder when inside it |
-| MediaMTX config | temp folder | MediaMtxServer | `mediamtx.yml` with RTSP only, the port, RTP/RTCP at port+1000/+1001, `authInternalUsers` for logins. Deleted on stop |
+| `ground-truth-YYYY-MM-DD.csv` | `Documents\MockRtsp\ground-truth\` or the folder in Settings > Server | GroundTruthLog | One line per plate streamed. Columns: utc_time, local_time, camera, substream, video, video_time, plate, x, y, width, height, stream_x, stream_y, stream_width, stream_height |
+| MediaMTX config | temp folder | MediaMtxServer | `mediamtx.yml` with RTSP only, the port, RTP/RTCP at port+1000/+1001, the control API on `127.0.0.1:<free port>` (for live stats, open to this computer only), and `authInternalUsers` for logins. Deleted on stop |
 
 ### Conventions (keep these when changing the code)
 
@@ -176,6 +240,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
     - writes a minimal YAML config to a temp folder (`BuildConfig`: RTSP only, transports, timeouts, `authInternalUsers` for publisher and viewer logins, or `any` with no password)
     - starts it, and waits until the port accepts connections
   - `IsPathReadyAsync` sends a real RTSP DESCRIBE and expects 200 OK: "a viewer could play this now".
+  - `GetPathStatsAsync` reads `/v3/paths/list` from MediaMTX's API (on `ApiPort`, a free local port chosen at start) and returns `PathStats(Ready, BytesReceived, Viewers)` per path, or null. Never throws.
   - `BuildUrl` puts logins in the URL. `Dispose` kills the process tree and deletes the temp folder.
 - **`OptionsStore.cs`**: loads and saves `StreamOptions` as JSON in `%APPDATA%\MockRtsp\options.json`. Never throws; invalid files fall back to defaults.
 - **`VlcLauncher.cs`**: finds `vlc.exe` (a bundled `vlc\` folder, then Program Files), opens a stream in its own window with low network caching and RTSP over TCP, and closes it again. MainForm reopens VLC after a camera restart because VLC does not reconnect by itself.
@@ -185,9 +250,11 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 - **`StreamOptions.cs`**: every setting.
   - Video: loop, bitrate, keyframe interval, size, frame rate, B-frames, publish transport.
   - Motion: auto scan, threshold %, min still s, padding s.
+  - Substream: on/off, width, frame rate, bitrate. `SubstreamPathFor(path)` (101 → 102), `SubstreamFormat(main)`, `SameSubstream`.
+  - Ground-truth log folder.
   - FFmpeg and MediaMTX log levels; server transports, timeouts and logins.
   - Remembered between runs: video folder, recent folders, last project, reopen flag.
-  - Also: `Validate()` (all rules, including the characters MediaMTX accepts in logins), `ServerSettingsEqual`, `OutputFormat(VideoInfo)`, `DecoderArguments`, `ScaleFilter` (scale to fit, pad, setsar, fps) and `EncoderArguments`.
+  - Also: `Validate()` (all rules, including the characters MediaMTX accepts in logins), `ServerSettingsEqual`, `OutputFormat(VideoInfo)`, `DecoderArguments`, `ScaleFilter` (scale to fit, pad, setsar, fps) and `EncoderArguments(format, url, substreamUrl)` (one output, or two through a split filter).
   - `VideoFormat` record struct: width, height, rate and `FrameBytes` for yuv420p.
 - **`VideoSettings.cs`**: the per-video subset of StreamOptions (loop, size, rate, bitrate, keyframes, B-frames, motion settings).
   - `From(StreamOptions)` and `ApplyTo(StreamOptions)`.
@@ -198,7 +265,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 - **`MotionProfile.cs`**: `record MotionProfile(IntervalSeconds, byte[] Levels)` with levels as percent x 10. `PercentAt(i)` and `StillParts(threshold, minStill, padding, duration)`.
 - **`MotionScan.cs`**: background FFmpeg pass that measures movement (see Motion and skips above). Exposes `Progress`, `IsComplete`, `IsCancelled`, `Result` and `Error`; `Dispose` cancels it.
 - **`VideoSidecar.cs`**: reads and writes `<video>.mockrtsp.json`.
-  - `Load` returns `SavedVideo(Skips, Motion, Settings, FileExists, FromOldFile)` and throws InvalidDataException on a damaged file.
+  - `Load` returns `SavedVideo(Skips, Motion, Settings, FileExists, FromOldFile, Plates)` and throws InvalidDataException on a damaged file.
   - `Save` writes atomically, deletes the file when there is nothing to keep, and removes the old `.skips.json`.
 - **`ThumbnailStrip.cs`**: preview pictures for the hover popup.
   - Pictures are taken about once per second (at most 600; keyframes only for videos over 5 minutes), at 108 px high, as JPEG via `-c:v mjpeg -f image2pipe`.
@@ -207,9 +274,22 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `GetJpeg(i)` gives random access to any picture.
 - **`VideoFile.cs`**: one open video, shared by all cameras that play it: path, `Info`, `Item` (as a PlaylistItem), `Skips`, `Motion`, `Previews`, own settings, scan state.
   - `Load(defaults)` reads the sidecar, starts an automatic scan the first time (when `AutoScanMotion` is on), and starts the previews.
-  - `SetSkips`, `SetOwnSettings`, `ApplyMotionSettings` and `SkipsMatchScan` each save straight away.
+  - `SetSkips`, `SetPlates`, `SetOwnSettings`, `ApplyMotionSettings` and `SkipsMatchScan` (the setters save straight away).
   - `StartScan(automatic)`; `Poll(defaults)` applies a finished scan (an automatic scan keeps skips the user made meanwhile).
   - Events: `Changed` (MainForm pushes skips to cameras) and `Message` (log lines).
+- **`PlateMarks.cs`**: ground-truth plates.
+  - `record PlateMark(Time, Plate, X?, Y?, Width?, Height?)` with the region as fractions of the video's picture; `Normalize(plate text)` keeps letters and digits in upper case for comparing.
+  - `PlateMarks`: `Normalize(list)`, `Check` (time inside the video, all-or-none region inside the picture), `FormatTime`/`TryParseTime` (83.4 or 1:23.4), and `ToCsv`/`FromCsv` (`time,plate,x,y,width,height`; errors name the line).
+  - `Csv`: escaping and a reader that handles quoted fields.
+- **`GroundTruthLog.cs`**: `record StreamedPlate` (one log line) and `GroundTruthLog`.
+  - `Write` appends thread-safely to the day's file and adds the header to a new file.
+  - `From(camera, substream, PlateStreamedEventArgs)` builds a line; `StreamRegion` maps a region into main-stream pixels, the same way `ScaleFilter` letterboxes.
+  - `Read(path)` parses a log; `DefaultFolder`/`FolderFor(options)` give the folder.
+- **`PlateScorer.cs`**: scoring ALPR results against the log.
+  - `ReadResults(path)` finds the time, plate and camera columns by name; times are ISO 8601 or Unix s/ms.
+  - `Score(truth, reads, before, after)`: exact match = hit, one character off = close, otherwise missed. The window ends early at the next pass of the same plate; repeats are used up.
+  - `ScoreResult` gives the counts and hit rate; `Summary` is the report text and `ToCsv` the per-plate report.
+- **`LiveStats.cs`**: `record CameraStats` and `LiveStats`. `Update(paths, time)` turns byte counts into kbit/s per path; `For(camera, path)` combines them with the camera's measured fps and viewer counts; `Describe` gives the panel text.
 - **`ProjectFile.cs`**: the saved setup (`ProjectFile`, `ProjectCamera`).
   - `Load` validates and turns relative paths into full ones.
   - `Save` makes paths relative where possible, strips the remembered fields and writes atomically.
@@ -223,6 +303,8 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - Controls: `Pause`/`Resume` (Resume at the end of a non-looping playlist starts over), `SeekTo`/`SeekBy` (within the current video), `PlayItem(i)`, `Rewind()` (to the start, or to the previous video within the first 2 s), `Next()`.
   - Playlist and skips: `SetPlaylist` (keeps the playing video and its skips if it stays), `SetSkipRanges(file, ranges)` and `SkipRangesOf`.
   - Running: `ApplyOptions`, `Start`/`Stop`, `SimulateOutageAsync` (comes back at "now", moved on through the playlist), and `WaitUntilLiveAsync` (polls DESCRIBE).
+  - Substream: `SubstreamPath`, `SubstreamUrl`, `SubstreamViewerUrl`, `SubstreamFormat`. `MeasuredFrameRate` is the frames actually sent per second.
+  - Ground truth: `SetPlates(file, plates)`; `PlateStreamed` (`PlateStreamedEventArgs(Utc, Video, Plate, Format)`) is raised on the pump thread after the plate's frame is written.
   - `PublisherExited` is raised on a background thread when FFmpeg dies by itself.
   - Internals: `Pump`; `ReadFrame` (moves to the next video at end of file, and skips a video that gives no frames); `Show` (skip check); `Resolve`; `MoveOnBy`; the `Decoder` class; `HighResolutionTimer`.
 
@@ -230,7 +312,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 
 - **`MainForm.cs` / `MainForm.Designer.cs`**: the window.
   - Layout:
-    - top row: port, Start/Stop server, Settings, Open/Save/Save as project, "Reopen the last project at startup"
+    - top row: port, Start/Stop server, Settings, Open/Save/Save as project, "Reopen the last project at startup", Score ALPR results
     - folder row: the folder combo with recent folders, Browse, Refresh
     - left: the video list (ListView: name, length, picture, skips, cameras; multi-select), the stream path box and Add camera
     - right: `_cameras` FlowLayoutPanel with one CameraPanel per camera
@@ -248,6 +330,8 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
     - `ReapplyMotion` asks before replacing hand-edited skips.
     - `RestartAsync`/`ApplySettingsToCameraAsync` restart, wait for the stream to be live, and reopen VLC.
   - Playlists: `EditPlaylistAsync` opens the PlaylistDialog, opens and releases videos, and restarts only if the first video changes what is sent.
+  - Ground truth: `OnPlateStreamed` writes each `PlateStreamed` to `_groundTruth` (a GroundTruthLog for the folder in the settings) and the log. `EditPlatesAsync` opens the PlatesDialog; `OnScoreClick` opens the ScoreDialog on today's (or the latest) log.
+  - Live stats: `PollStats`/`PollStatsAsync` run from the timer about once a second; `StatsFor(entry)` serves the panels. `CheckStreamPath` and `NextStreamPath` keep substream paths free of clashes.
   - Projects: `CaptureProject`, `SaveProject(path or null = ask)`, `OpenProjectAsync` (stops the server, applies settings, port and folder, starts the server, `RestoreCamera` for each), `ConfirmDiscardChanges` (Yes/No/Cancel when the fingerprint differs), `OnShown` (reopens the last project), `UpdateTitle`.
   - Also: `OnTimerTick` (every 250 ms: server health, scan polling, panel refresh, layout), `LayoutPanels`, `SetSplitters`/`FitSplitter`, `Safe`/`SafeAsync`/`HandleError`, `Log`.
 - **`CameraEntry.cs`**: one camera's state for the UI.
@@ -255,21 +339,24 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `PendingSkipStart`/`PendingSkipVideo`: a skip begun with Skip start, tied to its video.
   - `Plays(video)`; `SetPlaylist` updates the camera and its skips.
 - **`CameraPanel.cs` / `CameraPanel.Designer.cs`**: the UserControl for one camera, plus `ICameraHost`, the interface MainForm implements for it.
-  - Row 1: state badge (LIVE/PAUSED/OFF), stream path, details, Start/Stop, Open in VLC, Playlist..., Video settings..., Scan motion, outage seconds with Simulate, Remove.
-  - Row 2: video picker and Next (only with several videos), Rewind, « 10 s, Pause/Play, 10 s », time, Speed, Skip start/end, zoom -, +, Fit.
+  - Row 1: state badge (LIVE/PAUSED/OFF), stream path, details (videos, format, substream format, settings, skips, plates), Start/Stop, Open in VLC, Playlist..., Video settings..., Scan motion, Plates..., outage seconds with Simulate, Remove.
+  - Row 2: video picker and Next (only with several videos), Rewind, « 10 s, Pause/Play, 10 s », time, Speed, Skip start/end, zoom -, +, Fit, and the live stats.
   - Row 3: the Timeline.
   - `UpdateView()` (from the timer) refreshes everything, and switches the timeline to the video now playing. `_shown` records which video the timeline shows, so skip edits always go to that video even if the playlist moved on. `HeightFor(width)` gives the height with wrapped rows.
 - **`Timeline.cs`**: custom control for one video.
   - Ruler; a bar with skipped parts as dark red areas with draggable white edges.
   - The motion graph: faint below the threshold, solid green above, a red hatched grid where skipped. It is scaled to the video's busiest moment, with a dashed threshold line.
+  - Plate flags (`SetPlates`): yellow with the plate text where it fits, grey inside a skipped part; the hover caption lists plates near the mouse.
   - A green/red play strip; the playhead, the hover line, and an orange pending-skip line.
   - A horizontal scrollbar with zoom (Ctrl + wheel, ZoomIn/Out/ToFit) and auto-follow of the playhead.
   - Hover shows `PreviewPopup` with the JPEG decoded on demand (at most 150 kept).
   - Events `SeekRequested` and `SkipRangesChanged`. Mouse: click/drag to seek, drag edges, Shift + drag to create, right-click menu.
-- **`OptionsDialog.cs` / `OptionsDialog.Designer.cs`**: Settings dialog with the tabs "Defaults for videos" (looping, motion scan, encoding, publishing) and "Server" (MediaMTX transports, timeouts, log level, logins).
+- **`OptionsDialog.cs` / `OptionsDialog.Designer.cs`**: Settings dialog with the tabs "Defaults for videos" (looping, motion scan, encoding, publishing, substream) and "Server" (MediaMTX transports, timeouts, log level, logins, ground-truth log folder).
   - The same dialog edits one video (`new OptionsDialog(current, videoName, defaults)`): the server tab and server-only rows are hidden, and Reset becomes "Use defaults".
   - `Result` holds the edited copy; `CommitTyped` fixes NumericUpDown typing.
 - **`PlaylistDialog.cs` / `PlaylistDialog.Designer.cs`**: two lists (videos in the folder, and the playlist) with Add, Remove, Move up/down and Other file.... `Files` returns the chosen order.
+- **`PlatesDialog.cs` / `PlatesDialog.Designer.cs`**: a DataGridView of time, plate, x, y, width and height for one video, with Add at playhead, Remove, Import CSV... and Export CSV.... `Plates` returns the checked, sorted list; errors name the row.
+- **`ScoreDialog.cs` / `ScoreDialog.Designer.cs`**: picks the ground-truth log and the results file, sets the before/after window, shows `PlateScorer.Summary`, and saves the CSV report.
 - **`MainForm.resx`, `OptionsDialog.resx`**: resource files added by the Visual Studio designer. Nothing in them is used by the code.
 
 ### Other files
@@ -301,10 +388,17 @@ Newest last. Commit hashes are on `main`.
 - `3a0f29a` Playlists per camera (letterboxed to the first video's format, viewers stay connected); Rewind and Next; JPEG previews cached in `<video>.mockrtsp.previews`; green/red play strip.
 - `748e4b9` Projects (`.mockrtsp-project`): save, open, reopen at startup, unsaved-change prompt. The motion graph is drawn everywhere, with a red hatched grid where skipped.
 - Visual Studio added `MainForm.resx` and `OptionsDialog.resx` on main.
+- `0335caf` This README: developer guide, file reference, changes timeline.
+
+**2026-10-29: ALPR test bench**
+- Substream per camera (`.../102`, 640 wide by default) from the same encoder as the main stream; settings in Defaults for videos; clash checks on stream paths.
+- Ground-truth plates per video (Plates... dialog, CSV import and export, saved in `.mockrtsp.json`, flags on the timeline). The camera raises `PlateStreamed` when a plate's frame is sent, and the app writes the daily ground-truth log.
+- Score ALPR results: hit rate, one-character-off, misses, unmatched reads, latency statistics, per camera, CSV report.
+- Live stats per camera: measured fps, bitrate and viewers for the main stream and substream, from MediaMTX's API (now on, on a free local port, for this computer only).
 
 ## Where we left off
 
-- **Not yet confirmed on Windows**: the latest UI (playlist controls, Playlist dialog, project buttons, the new timeline drawing) was checked under Mono only. Things to look at on Windows:
+- **Not yet confirmed on Windows**: the latest UI (playlist controls, Playlist dialog, project buttons, the timeline drawing, the Plates and Score dialogs, the stats text) was checked under Mono only. Things to look at on Windows:
   - whether the player row wraps on narrower windows
   - the project open/save file dialogs
   - the startup reopen
@@ -313,8 +407,12 @@ Newest last. Commit hashes are on `main`.
   - Cameras are only saved in projects while the server runs (stopping the server removes them).
   - Logins are stored in plain text in options.json and in project files.
   - "Rewind" goes back to the start; it does not play backwards.
+  - Substream settings apply to every camera; there is no per-camera substream setting.
+  - The ground-truth time is when the frame goes into the encoder. What the ALPR system measures also includes encoding, MediaMTX and the network, so latency figures include that pipeline too.
 - **Ideas not done**:
   - per-camera loop setting (looping is per video/defaults now)
   - showing the whole playlist on one timeline
   - a test project in the repo
+  - drawing plate regions on the preview instead of typing fractions
+  - more ideas discussed: Hikvision ISAPI endpoints and snapshots, ONVIF discovery, fault injection (frozen picture, packet loss), a control API with headless mode, hardware encoding
   - the video list's Camera column is cut off at the default window width

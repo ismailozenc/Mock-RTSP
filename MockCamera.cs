@@ -11,6 +11,13 @@ public sealed record PlaylistItem(string File, VideoInfo Info)
 }
 
 /// <summary>
+/// A ground-truth plate went out on the stream: the frame at the plate's time was just handed
+/// to the encoder. Utc is when; Format is what the camera sends, for working out where the
+/// plate is in the streamed picture.
+/// </summary>
+public sealed record PlateStreamedEventArgs(DateTime Utc, PlaylistItem Video, PlateMark Plate, VideoFormat Format);
+
+/// <summary>
 /// A mock camera that plays a playlist of video files into MediaMTX like a live camera, with
 /// pause, seek, speed and skip ranges per video.
 ///
@@ -47,6 +54,11 @@ public sealed class MockCamera : IDisposable
     private double _speed = 1.0;
     private volatile bool _loop;                    // copy of _options.Loop, readable without _gate
 
+    // Pump thread only: plates reached by the frame being sent, raised once it is written.
+    private readonly List<(PlaylistItem Video, PlateMark Plate)> _plateHits = new();
+    private Target? _lastShown;                     // the frame shown before, to find plates passed since
+    private double _measuredFps;                    // frames actually written per second, over the last second
+
     // The last lines FFmpeg wrote, kept to explain why a camera stopped.
     private readonly Queue<string> _ffmpegOutput = new();
     private const int MaxOutputLines = 8;
@@ -65,6 +77,7 @@ public sealed class MockCamera : IDisposable
 
         public PlaylistItem Item { get; }
         public IReadOnlyList<SkipRange> Skips { get; set; }
+        public IReadOnlyList<PlateMark> Plates { get; set; } = Array.Empty<PlateMark>();
         public double Duration => Item.Info.DurationSeconds;
     }
 
@@ -74,6 +87,13 @@ public sealed class MockCamera : IDisposable
     /// Raised on a background thread.
     /// </summary>
     public event EventHandler<int>? PublisherExited;
+
+    /// <summary>
+    /// Raised when a ground-truth plate goes out on the stream: the frame at the plate's time has
+    /// just been written to the encoder. Not raised for plates in skipped parts, or passed over by
+    /// a seek. Raised on the camera's own thread, so keep handlers short.
+    /// </summary>
+    public event EventHandler<PlateStreamedEventArgs>? PlateStreamed;
 
     /// <param name="path">Stream path, e.g. "Streaming/Channels/101" to match Hikvision URLs.</param>
     /// <param name="playlist">The videos to play, in order. At least one.</param>
@@ -161,6 +181,53 @@ public sealed class MockCamera : IDisposable
             }
         }
     }
+
+    /// <summary>The substream's path (".../102" for ".../101"), or null when the substream is off.</summary>
+    public string? SubstreamPath
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _options.Substream ? StreamOptions.SubstreamPathFor(_path) : null;
+            }
+        }
+    }
+
+    /// <summary>The substream's URL without login details, or null when it is off.</summary>
+    public string? SubstreamUrl => SubstreamPath is { } sub ? _server.BuildUrl(sub) : null;
+
+    /// <summary>The substream's URL for a viewer, with the viewer login, or null when it is off.</summary>
+    public string? SubstreamViewerUrl
+    {
+        get
+        {
+            string? sub = SubstreamPath;
+            if (sub is null)
+                return null;
+
+            lock (_gate)
+            {
+                return _server.BuildUrl(sub, _options.ViewerUser, _options.ViewerPassword);
+            }
+        }
+    }
+
+    /// <summary>The substream's size and frame rate.</summary>
+    public VideoFormat SubstreamFormat
+    {
+        get
+        {
+            var main = Format;
+            lock (_gate)
+            {
+                return _options.SubstreamFormat(main);
+            }
+        }
+    }
+
+    /// <summary>Frames per second actually sent over the last second; 0 when stopped.</summary>
+    public double MeasuredFrameRate => IsOnline ? Volatile.Read(ref _measuredFps) : 0;
 
     /// <summary>The size and frame rate this camera sends: its settings applied to the first video.</summary>
     public VideoFormat Format
@@ -258,6 +325,16 @@ public sealed class MockCamera : IDisposable
         }
     }
 
+    /// <summary>Sets the ground-truth plates of a video, for every place it has in the playlist.</summary>
+    public void SetPlates(string file, IReadOnlyList<PlateMark> plates)
+    {
+        lock (_control)
+        {
+            foreach (var entry in _playlist.Where(e => SameFile(e.Item.File, file)))
+                entry.Plates = PlateMarks.Normalize(plates ?? Array.Empty<PlateMark>(), entry.Duration);
+        }
+    }
+
     /// <summary>The skip ranges in use for a video of the playlist.</summary>
     public IReadOnlyList<SkipRange> SkipRangesOf(string file)
     {
@@ -282,7 +359,11 @@ public sealed class MockCamera : IDisposable
             var playing = old[_item].Item.File;
 
             _playlist = items
-                .Select(i => new Entry(i, old.FirstOrDefault(e => SameFile(e.Item.File, i.File))?.Skips ?? Array.Empty<SkipRange>()))
+                .Select(i =>
+                {
+                    var before = old.FirstOrDefault(e => SameFile(e.Item.File, i.File));
+                    return new Entry(i, before?.Skips ?? Array.Empty<SkipRange>()) { Plates = before?.Plates ?? Array.Empty<PlateMark>() };
+                })
                 .ToList();
 
             int index = _playlist.FindIndex(e => SameFile(e.Item.File, playing));
@@ -618,7 +699,12 @@ public sealed class MockCamera : IDisposable
             {
                 start = new Target(_item, _positionSeconds);
                 _seekTo = null;                             // the start position already covers it
+                _lastShown = null;
             }
+
+            _plateHits.Clear();
+            var rateClock = Stopwatch.StartNew();
+            int rateFrames = 0;
 
             decoder = StartDecoder(start, format);
             if (ReadFrame(ref decoder, format, next))
@@ -683,6 +769,17 @@ public sealed class MockCamera : IDisposable
                 output.Write(frame, 0, frame.Length);
                 sent++;
 
+                if (_plateHits.Count > 0)
+                    RaisePlates(format);
+
+                rateFrames++;
+                if (rateClock.ElapsedMilliseconds >= 1000)
+                {
+                    Volatile.Write(ref _measuredFps, rateFrames * 1000.0 / rateClock.ElapsedMilliseconds);
+                    rateFrames = 0;
+                    rateClock.Restart();
+                }
+
                 // Frame n is due n frame-intervals after the start. If the computer stalled for
                 // over a second, start a fresh schedule instead of bursting to catch up.
                 double due = sent * 1000.0 / format.FrameRate;
@@ -708,7 +805,27 @@ public sealed class MockCamera : IDisposable
         finally
         {
             decoder?.Dispose();
+            Volatile.Write(ref _measuredFps, 0);
         }
+    }
+
+    /// <summary>Tells listeners about plates whose frame was just written. Pump thread.</summary>
+    private void RaisePlates(VideoFormat format)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var (video, plate) in _plateHits)
+        {
+            try
+            {
+                PlateStreamed?.Invoke(this, new PlateStreamedEventArgs(now, video, plate, format));
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, $"Camera {_path} plate listener");
+            }
+        }
+
+        _plateHits.Clear();
     }
 
     /// <summary>
@@ -842,10 +959,30 @@ public sealed class MockCamera : IDisposable
 
             _item = at.Item;
             _positionSeconds = at.Seconds;
+            CollectPlates(at, format);
         }
 
         (frame, next) = (next, frame);
         return true;
+    }
+
+    /// <summary>
+    /// Notes the plates this frame reaches: those after the frame shown before (when playing on
+    /// from it) up to this one. After a jump, only a plate on this very frame counts. Caller holds _control.
+    /// </summary>
+    private void CollectPlates(Target at, VideoFormat format)
+    {
+        var entry = _playlist[at.Item];
+        double from = _lastShown is { } last && last.Item == at.Item && at.Seconds >= last.Seconds && at.Seconds - last.Seconds < 2
+            ? last.Seconds
+            : at.Seconds - 1.0 / format.FrameRate;
+        _lastShown = at;
+
+        foreach (var plate in entry.Plates)
+        {
+            if (plate.Time > from && plate.Time <= at.Seconds)
+                _plateHits.Add((entry.Item, plate));
+        }
     }
 
     /// <summary>After an outage: moves on by the time the camera was down, through the playlist.</summary>
@@ -968,7 +1105,11 @@ public sealed class MockCamera : IDisposable
             RedirectStandardError = true
         };
 
-        foreach (var arg in _options.EncoderArguments(format, publishUrl))
+        string? substreamUrl = _options.Substream
+            ? _server.BuildUrl(StreamOptions.SubstreamPathFor(_path), _options.PublisherUser, _options.PublisherPassword)
+            : null;
+
+        foreach (var arg in _options.EncoderArguments(format, publishUrl, substreamUrl))
             psi.ArgumentList.Add(arg);
 
         var process = StartProcess(psi);

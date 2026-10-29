@@ -11,6 +11,7 @@ public sealed class VideoFile : IDisposable
     private readonly string _ffmpegPath;
     private VideoSettings? _ownSettings;
     private List<SkipRange> _skips = new();
+    private List<PlateMark> _plates = new();
     private MotionScan? _scan;
     private bool _scanIsAutomatic;
 
@@ -34,6 +35,9 @@ public sealed class VideoFile : IDisposable
     public PlaylistItem Item => new(Path, Info);
 
     public IReadOnlyList<SkipRange> Skips => _skips;
+
+    /// <summary>Ground truth: the licence plates visible in the video, and when. Saved next to it.</summary>
+    public IReadOnlyList<PlateMark> Plates => _plates;
 
     /// <summary>Movement over time, from the motion scan. Null until scanned.</summary>
     public MotionProfile? Motion { get; private set; }
@@ -74,12 +78,14 @@ public sealed class VideoFile : IDisposable
             _skips = saved.Skips;
             Motion = saved.Motion;
             _ownSettings = saved.Settings;
+            _plates = saved.Plates;
 
             if (saved.FileExists)
             {
                 var parts = new List<string> { $"{_skips.Count} skip(s)" };
                 if (saved.Settings is not null) parts.Add("its own settings");
                 if (saved.Scanned) parts.Add("motion data");
+                if (saved.Plates.Count > 0) parts.Add($"{saved.Plates.Count} plate(s)");
                 Say($"{Name}: loaded {string.Join(", ", parts)}"
                     + (saved.FromOldFile ? $" from {System.IO.Path.GetFileName(VideoSidecar.OldPathFor(Path))} (moved to {System.IO.Path.GetFileName(VideoSidecar.PathFor(Path))} on the next change)." : "."));
             }
@@ -132,6 +138,19 @@ public sealed class VideoFile : IDisposable
         SetSkips(still);
         Say($"{Name}: skips picked again from the saved motion data ({settings.MotionThresholdPercent:0.0} %, "
             + $"still parts over {settings.MinStillSeconds:0.#} s, {settings.MotionPaddingSeconds:0.#} s kept around movement). No rescan needed.");
+    }
+
+    // ===================================================================== plates
+
+    /// <summary>Replaces the ground-truth plates and saves them.</summary>
+    public void SetPlates(IEnumerable<PlateMark> plates)
+    {
+        _plates = PlateMarks.Normalize(plates, Duration);
+
+        if (Save())
+            Say(_plates.Count == 0 ? $"{Name}: no plates." : $"{Name}: {_plates.Count} plate(s) saved.");
+
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     // ===================================================================== settings
@@ -211,7 +230,7 @@ public sealed class VideoFile : IDisposable
     {
         try
         {
-            VideoSidecar.Save(Path, _skips, Motion, _ownSettings);
+            VideoSidecar.Save(Path, _skips, Motion, _ownSettings, _plates);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

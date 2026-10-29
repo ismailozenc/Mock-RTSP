@@ -23,6 +23,10 @@ public interface ICameraHost
     Task SimulateOutageAsync(CameraEntry entry, int seconds);
     Task EditVideoSettingsAsync(CameraEntry entry, VideoFile video);
     Task EditPlaylistAsync(CameraEntry entry);
+    Task EditPlatesAsync(CameraEntry entry, VideoFile video);
+
+    /// <summary>Live numbers for the camera, or null while the server is not reporting them.</summary>
+    CameraStats? StatsFor(CameraEntry entry);
     void ScanMotion(VideoFile video);
 }
 
@@ -94,9 +98,16 @@ public sealed partial class CameraPanel : UserControl
             var format = camera.Format;
             var settings = video.Effective(_host.Defaults);
             string skips = video.Skips.Count == 0 ? "no skips" : $"{video.Skips.Count} skip(s)";
+            string plates = video.Plates.Count == 0 ? string.Empty : $"   {video.Plates.Count} plate(s)";
+            string sub = camera.SubstreamPath is null ? string.Empty
+                : $"   sub {camera.SubstreamFormat.Width}x{camera.SubstreamFormat.Height} {camera.SubstreamFormat.FrameRate} fps";
             _details.Text = (several ? $"{playlist.Count} videos   " : $"{video.Name}   ")
-                            + $"{format.Width}x{format.Height} {format.FrameRate} fps   "
-                            + $"{(video.HasOwnSettings ? "own settings" : "default settings")}   {skips}";
+                            + $"{format.Width}x{format.Height} {format.FrameRate} fps{sub}   "
+                            + $"{(video.HasOwnSettings ? "own settings" : "default settings")}   {skips}{plates}";
+
+            _stats.Text = online && _host.StatsFor(Entry) is { } stats
+                ? LiveStats.Describe(stats, camera.SubstreamPath is not null)
+                : online ? "starting..." : "--";
 
             // The playlist picker, rebuilt when the playlist changes.
             string names = string.Join("|", playlist.Select(v => v.Path));
@@ -122,6 +133,7 @@ public sealed partial class CameraPanel : UserControl
             _settings.Enabled = idle;
             _scanMotion.Enabled = idle && !video.IsScanning;
             _scanMotion.Text = video.IsScanning ? $"Scanning {video.ScanProgress * 100:0}%" : "Scan motion";
+            _plates.Enabled = idle;
             _outage.Enabled = idle;
             _remove.Enabled = idle;
 
@@ -146,6 +158,7 @@ public sealed partial class CameraPanel : UserControl
             _timeline.SetSource(video.Previews, video.Duration);
             _timeline.SetSkipRanges(video.Skips);
             _timeline.SetMotion(video.Motion, settings.MotionThresholdPercent);
+            _timeline.SetPlates(video.Plates);
             _timeline.ScanProgress = video.ScanProgress;
             _timeline.PendingStart = ReferenceEquals(Entry.PendingSkipVideo, video) ? Entry.PendingSkipStart : null;
             _timeline.Position = camera.Position.TotalSeconds;
@@ -173,6 +186,9 @@ public sealed partial class CameraPanel : UserControl
         await DoAsync(entry => _host!.EditVideoSettingsAsync(entry, _shown ?? entry.Video), "Video settings");
 
     private async void OnPlaylistClick(object? sender, EventArgs e) => await DoAsync(entry => _host!.EditPlaylistAsync(entry), "Playlist");
+
+    private async void OnPlatesClick(object? sender, EventArgs e) =>
+        await DoAsync(entry => _host!.EditPlatesAsync(entry, _shown ?? entry.Video), "Plates");
 
     private void OnScanMotionClick(object? sender, EventArgs e) => Do(entry => _host!.ScanMotion(_shown ?? entry.Video), "Scan motion");
 

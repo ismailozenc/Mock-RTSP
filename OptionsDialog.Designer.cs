@@ -49,6 +49,14 @@ public sealed partial class OptionsDialog
     private ComboBox _publishTransport = null!;
     private Label _lblFfmpegLog = null!;
     private ComboBox _ffmpegLog = null!;
+    private Label _hdrSubstream = null!;
+    private CheckBox _substream = null!;
+    private Label _lblSubWidth = null!;
+    private NumericUpDown _subWidth = null!;
+    private Label _lblSubRate = null!;
+    private NumericUpDown _subRate = null!;
+    private Label _lblSubBitrate = null!;
+    private NumericUpDown _subBitrate = null!;
 
     // MediaMTX tab
     private TableLayoutPanel _mtxGrid = null!;
@@ -73,6 +81,11 @@ public sealed partial class OptionsDialog
     private TextBox _publisherUser = null!;
     private Label _lblPublisherPassword = null!;
     private TextBox _publisherPassword = null!;
+    private Label _hdrGroundTruth = null!;
+    private Label _lblGroundTruth = null!;
+    private FlowLayoutPanel _groundTruthRow = null!;
+    private TextBox _groundTruthFolder = null!;
+    private Button _browseGroundTruth = null!;
 
     protected override void Dispose(bool disposing)
     {
@@ -127,6 +140,14 @@ public sealed partial class OptionsDialog
         _publishTransport = new ComboBox();
         _lblFfmpegLog = new Label();
         _ffmpegLog = new ComboBox();
+        _hdrSubstream = new Label();
+        _substream = new CheckBox();
+        _lblSubWidth = new Label();
+        _subWidth = new NumericUpDown();
+        _lblSubRate = new Label();
+        _subRate = new NumericUpDown();
+        _lblSubBitrate = new Label();
+        _subBitrate = new NumericUpDown();
 
         _mtxGrid = new TableLayoutPanel();
         _mtxIntro = new Label();
@@ -150,6 +171,11 @@ public sealed partial class OptionsDialog
         _publisherUser = new TextBox();
         _lblPublisherPassword = new Label();
         _publisherPassword = new TextBox();
+        _hdrGroundTruth = new Label();
+        _lblGroundTruth = new Label();
+        _groundTruthRow = new FlowLayoutPanel();
+        _groundTruthFolder = new TextBox();
+        _browseGroundTruth = new Button();
 
         SuspendLayout();
 
@@ -197,7 +223,12 @@ public sealed partial class OptionsDialog
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _ffGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _ffGrid.Dock = DockStyle.Top;
-        _ffGrid.RowCount = 17;
+        _ffGrid.RowCount = 22;
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _ffGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -241,6 +272,16 @@ public sealed partial class OptionsDialog
         _ffGrid.Controls.Add(_publishTransport, 1, 15);
         _ffGrid.Controls.Add(_lblFfmpegLog, 0, 16);
         _ffGrid.Controls.Add(_ffmpegLog, 1, 16);
+        _ffGrid.Controls.Add(_hdrSubstream, 0, 17);
+        _ffGrid.Controls.Add(_substream, 0, 18);
+        _ffGrid.Controls.Add(_lblSubWidth, 0, 19);
+        _ffGrid.Controls.Add(_subWidth, 1, 19);
+        _ffGrid.Controls.Add(_lblSubRate, 0, 20);
+        _ffGrid.Controls.Add(_subRate, 1, 20);
+        _ffGrid.Controls.Add(_lblSubBitrate, 0, 21);
+        _ffGrid.Controls.Add(_subBitrate, 1, 21);
+        _ffGrid.SetColumnSpan(_hdrSubstream, 2);
+        _ffGrid.SetColumnSpan(_substream, 2);
         _ffGrid.SetColumnSpan(_ffIntro, 2);
         _ffGrid.SetColumnSpan(_hdrTiming, 2);
         _ffGrid.SetColumnSpan(_loop, 2);
@@ -396,6 +437,44 @@ public sealed partial class OptionsDialog
         _ffmpegLog.Margin = new Padding(0, 3, 0, 3);
         _ffmpegLog.Width = 140;
 
+        _hdrSubstream.AutoSize = true;
+        _hdrSubstream.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        _hdrSubstream.Margin = new Padding(0, 12, 0, 2);
+        _hdrSubstream.Text = "Substream (a smaller second stream from every camera)";
+
+        _substream.AutoSize = true;
+        _substream.Checked = true;
+        _substream.Margin = new Padding(12, 2, 0, 2);
+        _substream.Text = "Publish a substream: Streaming/Channels/102 next to .../101, like a real camera";
+
+        _lblSubWidth.AutoSize = true;
+        _lblSubWidth.Margin = new Padding(12, 6, 10, 0);
+        _lblSubWidth.Text = "Substream width (height keeps the shape):";
+
+        _subWidth.Increment = 16;
+        _subWidth.Margin = new Padding(0, 3, 0, 3);
+        _subWidth.Maximum = 1920;
+        _subWidth.Minimum = 160;
+        _subWidth.Value = 640;
+        _subWidth.Width = 110;
+
+        _lblSubRate.AutoSize = true;
+        _lblSubRate.Margin = new Padding(12, 6, 10, 0);
+        _lblSubRate.Text = "Substream frame rate (fps, 0 = same):";
+
+        _subRate.Margin = new Padding(0, 3, 0, 3);
+        _subRate.Maximum = 120;
+        _subRate.Width = 110;
+
+        _lblSubBitrate.AutoSize = true;
+        _lblSubBitrate.Margin = new Padding(12, 6, 10, 0);
+        _lblSubBitrate.Text = "Substream bitrate (kbps, 0 = default):";
+
+        _subBitrate.Increment = 100;
+        _subBitrate.Margin = new Padding(0, 3, 0, 3);
+        _subBitrate.Maximum = 100000;
+        _subBitrate.Width = 110;
+
         // ================= MediaMTX tab =================
         _tabMtx.AutoScroll = true;
         _tabMtx.Padding = new Padding(10);
@@ -409,7 +488,10 @@ public sealed partial class OptionsDialog
         _mtxGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _mtxGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _mtxGrid.Dock = DockStyle.Top;
-        _mtxGrid.RowCount = 13;
+        _mtxGrid.RowCount = 16;
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _mtxGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -444,6 +526,12 @@ public sealed partial class OptionsDialog
         _mtxGrid.Controls.Add(_publisherUser, 1, 11);
         _mtxGrid.Controls.Add(_lblPublisherPassword, 0, 12);
         _mtxGrid.Controls.Add(_publisherPassword, 1, 12);
+        _mtxGrid.Controls.Add(_hdrGroundTruth, 0, 13);
+        _mtxGrid.Controls.Add(_lblGroundTruth, 0, 14);
+        _mtxGrid.Controls.Add(_groundTruthRow, 0, 15);
+        _mtxGrid.SetColumnSpan(_hdrGroundTruth, 2);
+        _mtxGrid.SetColumnSpan(_lblGroundTruth, 2);
+        _mtxGrid.SetColumnSpan(_groundTruthRow, 2);
         _mtxGrid.SetColumnSpan(_mtxIntro, 2);
         _mtxGrid.SetColumnSpan(_hdrNetwork, 2);
         _mtxGrid.SetColumnSpan(_hdrLogging, 2);
@@ -542,6 +630,30 @@ public sealed partial class OptionsDialog
         _publisherPassword.UseSystemPasswordChar = true;
         _publisherPassword.Width = 200;
 
+        _hdrGroundTruth.AutoSize = true;
+        _hdrGroundTruth.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        _hdrGroundTruth.Margin = new Padding(0, 12, 0, 2);
+        _hdrGroundTruth.Text = "Ground-truth log (plates streamed, for scoring ALPR results)";
+
+        _lblGroundTruth.AutoSize = true;
+        _lblGroundTruth.Margin = new Padding(12, 4, 10, 0);
+        _lblGroundTruth.Text = "Folder (blank = Documents\\MockRtsp\\ground-truth); one file per day:";
+
+        _groundTruthFolder.Margin = new Padding(0, 3, 6, 3);
+        _groundTruthFolder.Width = 470;
+
+        _browseGroundTruth.AutoSize = true;
+        _browseGroundTruth.Margin = new Padding(0, 2, 0, 2);
+        _browseGroundTruth.Text = "Browse...";
+        _browseGroundTruth.Click += new EventHandler(OnBrowseGroundTruthClick);
+
+        _groundTruthRow.AutoSize = true;
+        _groundTruthRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _groundTruthRow.Margin = new Padding(12, 0, 0, 0);
+        _groundTruthRow.WrapContents = false;
+        _groundTruthRow.Controls.Add(_groundTruthFolder);
+        _groundTruthRow.Controls.Add(_browseGroundTruth);
+
         // ================= Tabs =================
         _tabs.Dock = DockStyle.Fill;
         _tabs.Padding = new Point(12, 4);
@@ -554,6 +666,7 @@ public sealed partial class OptionsDialog
         _tips.SetToolTip(_minStill, "Still parts shorter than this keep playing, so short pauses in the action are not cut.");
         _tips.SetToolTip(_motionPadding, "Time kept before movement starts and after it ends, so a car is seen arriving and leaving.");
         _tips.SetToolTip(_keyframe, "A new viewer shows nothing until the next keyframe. 0 sends one every second, so playback starts within about a second.");
+        _tips.SetToolTip(_substream, "Real ALPR setups often detect on the small substream and read plates on the main stream. The substream is made by the same FFmpeg, so both show the same moment.");
         _tips.SetToolTip(_transports, "Which transports MediaMTX accepts from viewers. TCP is the most reliable.");
         _tips.SetToolTip(_viewerUser, "Set both a username and a password to require a login for viewers.");
         _tips.SetToolTip(_publisherUser, "Set both a username and a password to require a login for the publisher.");
@@ -563,7 +676,7 @@ public sealed partial class OptionsDialog
         CancelButton = _cancel;
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(640, 600);
+        ClientSize = new Size(640, 640);
         Font = new Font("Segoe UI", 9F);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;

@@ -3,22 +3,79 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 namespace MockRtsp;
 
+/// <summary>What MediaMTX reports for one stream path.</summary>
+public sealed record PathStats(bool Ready, long BytesReceived, int Viewers);
+
 public sealed class MediaMtxServer : IDisposable
 {
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(2) };
+
     private readonly Process _process;
     private readonly string _workDir;
     private bool _disposed;
 
     public int Port { get; }
 
-    private MediaMtxServer(Process process, string workDir, int port)
+    /// <summary>MediaMTX's control API, on a free local port, used for the live stats.</summary>
+    public int ApiPort { get; }
+
+    private MediaMtxServer(Process process, string workDir, int port, int apiPort)
     {
         _process = process;
         _workDir = workDir;
         Port = port;
+        ApiPort = apiPort;
+    }
+
+    /// <summary>
+    /// Every stream path MediaMTX has, with whether it is publishing, the bytes received from the
+    /// camera so far and the number of viewers. Null when the API does not answer. Never throws.
+    /// </summary>
+    public async Task<Dictionary<string, PathStats>?> GetPathStatsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            string json = await Http.GetStringAsync($"http://127.0.0.1:{ApiPort}/v3/paths/list?itemsPerPage=1000", ct);
+            using var doc = JsonDocument.Parse(json);
+            var result = new Dictionary<string, PathStats>(StringComparer.Ordinal);
+
+            foreach (var item in doc.RootElement.GetProperty("items").EnumerateArray())
+            {
+                string name = item.GetProperty("name").GetString() ?? string.Empty;
+                bool ready = item.TryGetProperty("ready", out var r) && r.ValueKind == JsonValueKind.True;
+                long bytes = item.TryGetProperty("bytesReceived", out var b) && b.TryGetInt64(out long v) ? v : 0;
+                int viewers = item.TryGetProperty("readers", out var readers) && readers.ValueKind == JsonValueKind.Array
+                    ? readers.GetArrayLength()
+                    : 0;
+                result[name] = new PathStats(ready, bytes, viewers);
+            }
+
+            return result;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
+                                       or InvalidOperationException or KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A TCP port nothing is listening on, chosen by the system.</summary>
+    private static int FreeLocalPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            return ((IPEndPoint)listener.LocalEndpoint).Port;
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
     public bool IsRunning
@@ -128,7 +185,8 @@ public sealed class MediaMtxServer : IDisposable
         try
         {
             string configPath = Path.Combine(workDir, "mediamtx.yml");
-            await File.WriteAllTextAsync(configPath, BuildConfig(port, settings), ct);
+            int apiPort = FreeLocalPort();
+            await File.WriteAllTextAsync(configPath, BuildConfig(port, apiPort, settings), ct);
 
             var psi = new ProcessStartInfo(exe, $"\"{configPath}\"")
             {
@@ -149,7 +207,7 @@ public sealed class MediaMtxServer : IDisposable
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            server = new MediaMtxServer(process, workDir, port);
+            server = new MediaMtxServer(process, workDir, port, apiPort);
             await WaitForPortAsync(process, port, readyTimeout ?? TimeSpan.FromSeconds(10), ct);
             return server;
         }
@@ -193,7 +251,7 @@ public sealed class MediaMtxServer : IDisposable
         }
     }
 
-    private static string BuildConfig(int port, StreamOptions options)
+    private static string BuildConfig(int port, int apiPort, StreamOptions options)
     {
         var sb = new StringBuilder();
 
@@ -209,12 +267,18 @@ public sealed class MediaMtxServer : IDisposable
         sb.AppendLine("hls: no");
         sb.AppendLine("webrtc: no");
         sb.AppendLine("srt: no");
-        sb.AppendLine("api: no");
+        sb.AppendLine("api: yes");                                  // for the live stats, on this computer only
+        sb.AppendLine($"apiAddress: 127.0.0.1:{apiPort}");
         sb.AppendLine("metrics: no");
         // Logins. "any" with an empty password means no login is needed for that action.
         sb.AppendLine("authInternalUsers:");
         AppendUser(sb, options.PublisherUser, options.PublisherPassword, "publish");
         AppendUser(sb, options.ViewerUser, options.ViewerPassword, "read", "playback");
+        sb.AppendLine("  - user: any");                              // the app reads the stats without a login, from this computer only
+        sb.AppendLine("    pass: \"\"");
+        sb.AppendLine("    ips: ['127.0.0.1', '::1']");
+        sb.AppendLine("    permissions:");
+        sb.AppendLine("      - action: api");
 
         sb.AppendLine("paths:");
         sb.AppendLine("  all_others:");

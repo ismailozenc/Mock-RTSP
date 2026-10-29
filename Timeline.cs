@@ -25,6 +25,7 @@ public sealed class Timeline : Control
     private readonly PreviewPopup _preview = new();
     private readonly Dictionary<int, Bitmap> _bitmaps = new();
     private readonly List<SkipRange> _skips = new();
+    private readonly List<PlateMark> _plates = new();
     private ThumbnailStrip? _strip;
     private MotionProfile? _motion;
     private double _motionThreshold = 0.3;
@@ -133,6 +134,17 @@ public sealed class Timeline : Control
 
         _skips.Clear();
         _skips.AddRange(ranges);
+        Invalidate();
+    }
+
+    /// <summary>Ground-truth plates, shown as yellow markers (grey in skipped parts, which are never streamed).</summary>
+    public void SetPlates(IReadOnlyList<PlateMark> plates)
+    {
+        if (_plates.SequenceEqual(plates))
+            return;
+
+        _plates.Clear();
+        _plates.AddRange(plates);
         Invalidate();
     }
 
@@ -309,6 +321,7 @@ public sealed class Timeline : Control
             DrawSkipAreas(g);
             DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));
             DrawSkipEdges(g);
+            DrawPlates(g);
             DrawPlayStrip(g);
             DrawRuler(g);
             DrawStatus(g);
@@ -438,6 +451,47 @@ public sealed class Timeline : Control
             if (rect.Width > 56)
                 TextRenderer.DrawText(g, $"skip {range.Length:0.0} s", Font, new Rectangle(rect.Left + 6, rect.Top + 1, rect.Width - 10, Font.Height + 2),
                     Color.FromArgb(255, 150, 150), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    /// <summary>
+    /// A marker per ground-truth plate: a thin line with a small flag and the plate text where it
+    /// fits. Yellow when it will be streamed, grey inside a skipped part.
+    /// </summary>
+    private void DrawPlates(Graphics g)
+    {
+        if (_plates.Count == 0)
+            return;
+
+        var bar = BarArea;
+        bool skipsApply = MockRtsp.SkipRanges.LeavesSomethingToPlay(_skips, _duration);
+        using var small = new Font(Font.FontFamily, (float)Math.Max(6.5, Font.Size - 1.5));
+        int nextFreeX = int.MinValue;
+
+        foreach (var plate in _plates)
+        {
+            int x = TimeToX(plate.Time);
+            if (x < -1 || x > ViewWidth + 1)
+                continue;
+
+            bool skipped = skipsApply && RangeAt(plate.Time) >= 0;
+            var color = skipped ? Color.FromArgb(150, 150, 150) : Color.Gold;
+
+            using (var pen = new Pen(Color.FromArgb(170, color)))
+                g.DrawLine(pen, x, bar.Top + 2, x, bar.Bottom - 2);
+
+            using (var brush = new SolidBrush(color))
+                g.FillPolygon(brush, new[] { new Point(x, bar.Top + 2), new Point(x + 7, bar.Top + 5), new Point(x, bar.Top + 8) });
+
+            var size = TextRenderer.MeasureText(plate.Plate, small);
+            if (x + 9 >= nextFreeX && x + 9 + size.Width < ViewWidth)
+            {
+                var box = new Rectangle(x + 9, bar.Top + 2, size.Width, size.Height);
+                using (var back = new SolidBrush(Color.FromArgb(170, 0, 0, 0)))
+                    g.FillRectangle(back, box);
+                TextRenderer.DrawText(g, plate.Plate, small, box, color, TextFormatFlags.NoPadding);
+                nextFreeX = box.Right + 4;
+            }
         }
     }
 
@@ -574,6 +628,12 @@ public sealed class Timeline : Control
 
         int index = _skips.FindIndex(r => r.Contains(seconds));
         string caption = FormatPrecise(seconds) + (index >= 0 ? "  (skipped)" : string.Empty);
+
+        // Plates within a few pixels of the mouse.
+        double near = Math.Max(0.3, 6 / Math.Max(_pixelsPerSecond, 0.0001));
+        var plates = _plates.Where(p => Math.Abs(p.Time - seconds) <= near).Select(p => p.Plate).ToList();
+        if (plates.Count > 0)
+            caption += "  plate " + string.Join(", ", plates);
 
         Bitmap? image = BitmapFor(seconds);
         string? note = image is not null ? null

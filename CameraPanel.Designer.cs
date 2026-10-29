@@ -16,6 +16,8 @@ public sealed partial class CameraPanel
     private Button _playlist = null!;
     private Button _settings = null!;
     private Button _scanMotion = null!;
+    private Button _plates = null!;
+    private Label _stats = null!;
     private Label _lblOutage = null!;
     private NumericUpDown _outageSeconds = null!;
     private Button _outage = null!;
@@ -59,6 +61,8 @@ public sealed partial class CameraPanel
         _playlist = new Button();
         _settings = new Button();
         _scanMotion = new Button();
+        _plates = new Button();
+        _stats = new Label();
         _lblOutage = new Label();
         _outageSeconds = new NumericUpDown();
         _outage = new Button();
@@ -114,6 +118,14 @@ public sealed partial class CameraPanel
         _settings.Text = "Video settings...";
         _scanMotion.Size = new Size(110, 28);
         _scanMotion.Text = "Scan motion";
+        _plates.Size = new Size(70, 28);
+        _plates.Text = "Plates...";
+
+        _stats.AutoSize = true;
+        _stats.Font = new Font("Consolas", 8.5F);
+        _stats.ForeColor = SystemColors.GrayText;
+        _stats.Margin = new Padding(10, 8, 0, 0);
+        _stats.Text = "--";
 
         _lblOutage.AutoSize = true;
         _lblOutage.Margin = new Padding(10, 7, 2, 0);
@@ -135,7 +147,7 @@ public sealed partial class CameraPanel
         _header.Dock = DockStyle.Fill;
         _header.Margin = new Padding(0);
         _header.WrapContents = true;
-        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _lblOutage, _outageSeconds, _outage, _remove });
+        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _plates, _lblOutage, _outageSeconds, _outage, _remove });
 
         // ================= Player: video, rewind, pause, back, forward, next, speed, skips, zoom =================
         _video.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -184,7 +196,7 @@ public sealed partial class CameraPanel
         _player.Dock = DockStyle.Fill;
         _player.Margin = new Padding(0, 2, 0, 0);
         _player.WrapContents = true;
-        _player.Controls.AddRange(new Control[] { _video, _rewind, _back10, _playPause, _forward10, _next, _time, _lblSpeed, _speed, _skipStart, _skipEnd, _zoomOut, _zoomIn, _zoomFit });
+        _player.Controls.AddRange(new Control[] { _video, _rewind, _back10, _playPause, _forward10, _next, _time, _lblSpeed, _speed, _skipStart, _skipEnd, _zoomOut, _zoomIn, _zoomFit, _stats });
 
         // ================= Timeline: hover to preview, click to jump, red = skipped =================
         _timeline.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -212,6 +224,7 @@ public sealed partial class CameraPanel
         _next.Click += new EventHandler(OnNextClick);
         _settings.Click += new EventHandler(OnSettingsClick);
         _scanMotion.Click += new EventHandler(OnScanMotionClick);
+        _plates.Click += new EventHandler(OnPlatesClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _remove.Click += new EventHandler(OnRemoveClick);
         _back10.Click += new EventHandler(OnBack10Click);

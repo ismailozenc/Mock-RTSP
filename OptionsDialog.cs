@@ -62,7 +62,15 @@ public sealed partial class OptionsDialog : Form
         _publishTransport.Visible = false;
         _lblFfmpegLog.Visible = false;
         _ffmpegLog.Visible = false;
-        ClientSize = new Size(ClientSize.Width, ClientSize.Height - 90);
+        _hdrSubstream.Visible = false;
+        _substream.Visible = false;
+        _lblSubWidth.Visible = false;
+        _subWidth.Visible = false;
+        _lblSubRate.Visible = false;
+        _subRate.Visible = false;
+        _lblSubBitrate.Visible = false;
+        _subBitrate.Visible = false;
+        ClientSize = new Size(ClientSize.Width, ClientSize.Height - 130);
     }
 
     private void FillComboBoxes()
@@ -88,6 +96,11 @@ public sealed partial class OptionsDialog : Form
         _noBFrames.Checked = o.NoBFrames;
         _publishTransport.SelectedItem = o.PublishTransport;
         _ffmpegLog.SelectedItem = o.FfmpegLogLevel;
+        _substream.Checked = o.Substream;
+        SetValue(_subWidth, o.SubstreamWidth);
+        SetValue(_subRate, o.SubstreamFrameRate);
+        SetValue(_subBitrate, o.SubstreamBitrateKbps);
+        _groundTruthFolder.Text = o.GroundTruthFolder;
 
         _mtxLog.SelectedItem = o.MediaMtxLogLevel;
         _transports.SelectedIndex = (int)o.Transports;
@@ -118,6 +131,9 @@ public sealed partial class OptionsDialog : Form
         CommitTyped(_minStill);
         CommitTyped(_motionPadding);
         CommitTyped(_writeTimeout);
+        CommitTyped(_subWidth);
+        CommitTyped(_subRate);
+        CommitTyped(_subBitrate);
 
         _working.Loop = _loop.Checked;
         _working.AutoScanMotion = _autoScan.Checked;
@@ -132,6 +148,11 @@ public sealed partial class OptionsDialog : Form
         _working.NoBFrames = _noBFrames.Checked;
         _working.PublishTransport = _publishTransport.SelectedItem?.ToString() ?? "tcp";
         _working.FfmpegLogLevel = _ffmpegLog.SelectedItem?.ToString() ?? "warning";
+        _working.Substream = _substream.Checked;
+        _working.SubstreamWidth = (int)_subWidth.Value & ~1;
+        _working.SubstreamFrameRate = (int)_subRate.Value;
+        _working.SubstreamBitrateKbps = (int)_subBitrate.Value;
+        _working.GroundTruthFolder = _groundTruthFolder.Text.Trim();
 
         _working.MediaMtxLogLevel = _mtxLog.SelectedItem?.ToString() ?? "warn";
         _working.Transports = (RtspTransportMode)Math.Max(0, _transports.SelectedIndex);
@@ -159,6 +180,18 @@ public sealed partial class OptionsDialog : Form
     // ---- Event handlers (wired in OptionsDialog.Designer.cs) ----
 
     private void OnResetClick(object? sender, EventArgs e) => LoadValues(_defaults ?? new StreamOptions());
+
+    private void OnBrowseGroundTruthClick(object? sender, EventArgs e)
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Folder for the ground-truth log",
+            SelectedPath = Directory.Exists(_groundTruthFolder.Text) ? _groundTruthFolder.Text : GroundTruthLog.DefaultFolder
+        };
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            _groundTruthFolder.Text = dialog.SelectedPath;
+    }
 
     private void OnOkClick(object? sender, EventArgs e)
     {

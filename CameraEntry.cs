@@ -48,7 +48,10 @@ public sealed class CameraEntry
         _playlist = playlist.ToList();
 
         foreach (var video in _playlist)
+        {
             Camera.SetSkipRanges(video.Path, video.Skips);
+            Camera.SetPlates(video.Path, video.Plates);
+        }
 
         if (PendingSkipVideo is not null && !_playlist.Contains(PendingSkipVideo))
         {

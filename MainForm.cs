@@ -31,6 +31,13 @@ public sealed partial class MainForm : Form, ICameraHost
     private string? _projectPath;                   // the project open, if any
     private string _savedFingerprint = new ProjectFile().Fingerprint();   // the setup as last saved or opened
     private bool _loadingOptions;
+
+    private GroundTruthLog _groundTruth = new(GroundTruthLog.DefaultFolder);
+    private bool _groundTruthAnnounced;             // the log's path is told once, at the first plate
+    private bool _groundTruthFailed;                // a write error is told once
+    private readonly LiveStats _liveStats = new();
+    private bool _statsPolling;
+    private DateTime _statsDue;
     private readonly HashSet<string> _playableFiles = new(StringComparer.OrdinalIgnoreCase);   // of the current folder
     private int _folderGeneration;                  // bumped per folder load, so late results of an old one are dropped
 
@@ -60,6 +67,7 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         _options = OptionsStore.Load();
+        _groundTruth = new GroundTruthLog(GroundTruthLog.FolderFor(_options));
 
         // Auto setup: look for the bundled tools once, at startup.
         _mediaMtxExe = Toolchain.Find(Toolchain.MediaMtxFolder, "mediamtx.exe");
@@ -164,6 +172,8 @@ public sealed partial class MainForm : Form, ICameraHost
             foreach (var video in _videos.Values.ToList())
                 video.Poll(_options);                   // applies finished motion scans
 
+            PollStats();
+
             foreach (var panel in _panels.Values)
                 panel.UpdateView();
 
@@ -175,6 +185,95 @@ public sealed partial class MainForm : Form, ICameraHost
             ErrorReporter.Report(ex, "Status timer");
         }
     }
+
+    // ===================================================================== live stats
+
+    public CameraStats? StatsFor(CameraEntry entry) =>
+        _server is null ? null : _liveStats.For(entry.Camera, entry.StreamPath);
+
+    /// <summary>About once a second, asks MediaMTX for its paths in the background; the panels show the result.</summary>
+    private void PollStats()
+    {
+        if (_server is not { } server || _statsPolling || DateTime.UtcNow < _statsDue)
+            return;
+
+        _statsPolling = true;
+        _statsDue = DateTime.UtcNow.AddSeconds(1);
+        _ = PollStatsAsync(server);
+    }
+
+    private async Task PollStatsAsync(MediaMtxServer server)
+    {
+        try
+        {
+            var paths = await server.GetPathStatsAsync();
+            if (paths is not null && ReferenceEquals(server, _server))
+                _liveStats.Update(paths, DateTime.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            ErrorReporter.Report(ex, "Live stats");
+        }
+        finally
+        {
+            _statsPolling = false;
+        }
+    }
+
+    // ===================================================================== ground truth
+
+    /// <summary>A camera streamed a ground-truth plate: write it to the log. Called on the camera's thread.</summary>
+    private void OnPlateStreamed(CameraEntry entry, PlateStreamedEventArgs e)
+    {
+        try
+        {
+            var log = _groundTruth;
+            log.Write(GroundTruthLog.From(entry.StreamPath, entry.Camera.SubstreamPath, e));
+
+            if (!_groundTruthAnnounced)
+            {
+                _groundTruthAnnounced = true;
+                Log($"Ground-truth log: {log.TodayPath}");
+            }
+
+            Log($"'{entry.StreamPath}': plate {e.Plate.Plate} streamed ({e.Video.Name} at {PlateMarks.FormatTime(e.Plate.Time)}).");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ErrorReporter.Report(ex, "Writing the ground-truth log");
+            if (!_groundTruthFailed)
+            {
+                _groundTruthFailed = true;
+                Log($"ERROR: could not write the ground-truth log in {_groundTruth.Folder} ({ex.Message}). "
+                    + "Check the folder in Settings > Server.");
+            }
+        }
+    }
+
+    /// <summary>One video's ground-truth plates, saved next to it.</summary>
+    public Task EditPlatesAsync(CameraEntry entry, VideoFile video)
+    {
+        double playhead = ReferenceEquals(entry.Video, video) ? entry.Camera.Position.TotalSeconds : 0;
+
+        using var dialog = new PlatesDialog(video.Name, video.Plates, playhead, video.Duration);
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            video.SetPlates(dialog.Plates);
+
+        return Task.CompletedTask;
+    }
+
+    private void OnScoreClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        string today = _groundTruth.TodayPath;
+        string start = File.Exists(today)
+            ? today
+            : Directory.Exists(_groundTruth.Folder)
+                ? Directory.GetFiles(_groundTruth.Folder, "ground-truth-*.csv").OrderByDescending(f => f).FirstOrDefault() ?? today
+                : today;
+
+        using var dialog = new ScoreDialog(start);
+        dialog.ShowDialog(this);
+    }, "Score ALPR results");
 
     // ===================================================================== event handlers
 
@@ -434,9 +533,9 @@ public sealed partial class MainForm : Form, ICameraHost
         item.SubItems[2].Text = $"{info.Width}x{info.Height} {info.FrameRate:0.##} fps";
 
         if (_videos.TryGetValue(file, out var video))
-            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings);
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count);
         else
-            item.SubItems[3].Text = saved is null ? "?" : DescribeSaved(saved.Skips, saved.Scanned, saved.Settings is not null);
+            item.SubItems[3].Text = saved is null ? "?" : DescribeSaved(saved.Skips, saved.Scanned, saved.Settings is not null, saved.Plates.Count);
     }
 
     /// <summary>Refreshes a video's row: its skips and the cameras playing it.</summary>
@@ -447,7 +546,7 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         if (_videos.TryGetValue(file, out var video))
-            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings);
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count);
 
         UpdateCameraColumn(item);
     }
@@ -468,11 +567,14 @@ public sealed partial class MainForm : Form, ICameraHost
             .FirstOrDefault(i => string.Equals(Path.GetFullPath((string)i.Tag!), full, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings)
+    private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings, int plates)
     {
         string text = skips.Count > 0
             ? $"{skips.Count} skip(s), {FormatTime(TimeSpan.FromSeconds(skips.Sum(r => r.Length)))} cut"
             : scanned ? "scanned, nothing cut" : "not scanned";
+
+        if (plates > 0)
+            text += $", {plates} plate(s)";
 
         return ownSettings ? text + ", own settings" : text;
     }
@@ -531,6 +633,7 @@ public sealed partial class MainForm : Form, ICameraHost
         var server = _server;
         _server = null;
         _serverOptions = null;
+        _liveStats.Clear();
 
         try
         {
@@ -609,9 +712,13 @@ public sealed partial class MainForm : Form, ICameraHost
         };
 
         foreach (var video in playlist)
+        {
             camera.SetSkipRanges(video.Path, video.Skips);
+            camera.SetPlates(video.Path, video.Plates);
+        }
 
         var entry = new CameraEntry(path, playlist, camera);
+        camera.PlateStreamed += (_, e) => OnPlateStreamed(entry, e);
         _entries.Add(entry);
         var panel = new CameraPanel(this, entry);
         _panels[entry] = panel;
@@ -896,7 +1003,10 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         foreach (var entry in CamerasOf(video))
+        {
             entry.Camera.SetSkipRanges(video.Path, video.Skips);
+            entry.Camera.SetPlates(video.Path, video.Plates);
+        }
 
         UpdateFileItem(video.Path);
     }
@@ -930,6 +1040,20 @@ public sealed partial class MainForm : Form, ICameraHost
         if (_entries.Any(e => e.StreamPath.Equals(path, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"A camera with path '{path}' already exists.");
 
+        // A camera's substream must not land on another camera's path, either way round.
+        if (_options.Substream)
+        {
+            string sub = StreamOptions.SubstreamPathFor(path);
+            var clash = _entries.FirstOrDefault(e =>
+                e.StreamPath.Equals(sub, StringComparison.OrdinalIgnoreCase)
+                || (e.Camera.SubstreamPath ?? string.Empty).Equals(path, StringComparison.OrdinalIgnoreCase)
+                || (e.Camera.SubstreamPath ?? string.Empty).Equals(sub, StringComparison.OrdinalIgnoreCase));
+
+            if (clash is not null)
+                throw new InvalidOperationException(
+                    $"'{path}' would clash with camera '{clash.StreamPath}' and its substream '{clash.Camera.SubstreamPath}'. Pick another path.");
+        }
+
         return path;
     }
 
@@ -939,7 +1063,8 @@ public sealed partial class MainForm : Form, ICameraHost
         for (int channel = 1; channel < 1000; channel++)
         {
             string candidate = $"Streaming/Channels/{channel}01";
-            if (!_entries.Any(e => e.StreamPath.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            if (!_entries.Any(e => e.StreamPath.Equals(candidate, StringComparison.OrdinalIgnoreCase)
+                                   || (e.Camera.SubstreamPath ?? string.Empty).Equals(candidate, StringComparison.OrdinalIgnoreCase)))
                 return candidate;
         }
 
@@ -952,7 +1077,7 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         entry.Camera.Start();
-        Log($"Started {entry.Camera.Url}");
+        Log($"Started {entry.Camera.Url}" + (entry.Camera.SubstreamUrl is { } sub ? $" (substream {sub})" : string.Empty));
     }
 
     public void StopCamera(CameraEntry entry)
@@ -1119,7 +1244,16 @@ public sealed partial class MainForm : Form, ICameraHost
 
         var before = VideoSettings.From(old);
         var after = VideoSettings.From(_options);
-        bool publishingChanged = old.PublishTransport != _options.PublishTransport || old.FfmpegLogLevel != _options.FfmpegLogLevel;
+        bool publishingChanged = old.PublishTransport != _options.PublishTransport || old.FfmpegLogLevel != _options.FfmpegLogLevel
+                                 || !old.SameSubstream(_options);
+
+        if (GroundTruthLog.FolderFor(old) != GroundTruthLog.FolderFor(_options))
+        {
+            _groundTruth = new GroundTruthLog(GroundTruthLog.FolderFor(_options));
+            _groundTruthAnnounced = false;
+            _groundTruthFailed = false;
+            Log($"Ground-truth log now goes to {_groundTruth.Folder}.");
+        }
         int own = _videos.Values.Count(v => v.HasOwnSettings);
 
         Log($"Defaults saved: {Describe(_options)}."

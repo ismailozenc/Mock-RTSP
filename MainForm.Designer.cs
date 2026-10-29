@@ -23,6 +23,7 @@ public sealed partial class MainForm
     private Button _saveProject = null!;
     private Button _saveProjectAs = null!;
     private CheckBox _openAtStartup = null!;
+    private Button _scoreResults = null!;
     private FlowLayoutPanel _folderRow = null!;
     private Label _lblFolder = null!;
     private ComboBox _folder = null!;
@@ -77,6 +78,7 @@ public sealed partial class MainForm
         _saveProject = new Button();
         _saveProjectAs = new Button();
         _openAtStartup = new CheckBox();
+        _scoreResults = new Button();
         _folderRow = new FlowLayoutPanel();
         _lblFolder = new Label();
         _folder = new ComboBox();
@@ -150,12 +152,15 @@ public sealed partial class MainForm
         _openAtStartup.AutoSize = true;
         _openAtStartup.Margin = new Padding(10, 7, 3, 3);
         _openAtStartup.Text = "Reopen the last project at startup";
+        _scoreResults.AutoSize = true;
+        _scoreResults.Margin = new Padding(24, 3, 3, 3);
+        _scoreResults.Text = "Score ALPR results...";
 
         _serverRow.AutoSize = true;
         _serverRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _serverRow.Margin = new Padding(0, 0, 0, 2);
         _serverRow.WrapContents = true;
-        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton, _openProject, _saveProject, _saveProjectAs, _openAtStartup });
+        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton, _openProject, _saveProject, _saveProjectAs, _openAtStartup, _scoreResults });
 
         // ================= Folder row =================
         _lblFolder.AutoSize = true;
@@ -302,6 +307,7 @@ public sealed partial class MainForm
         _saveProject.Click += new EventHandler(OnSaveProjectClick);
         _saveProjectAs.Click += new EventHandler(OnSaveProjectAsClick);
         _openAtStartup.CheckedChanged += new EventHandler(OnOpenAtStartupChanged);
+        _scoreResults.Click += new EventHandler(OnScoreClick);
         _folder.SelectionChangeCommitted += new EventHandler(OnFolderPicked);
         _folder.KeyDown += new KeyEventHandler(OnFolderKeyDown);
         _browseFolder.Click += new EventHandler(OnBrowseFolderClick);
