@@ -122,7 +122,7 @@ public sealed partial class CameraPanel : UserControl
             _playlist.Enabled = idle;
             _settings.Enabled = idle;
             _scanMotion.Enabled = idle && !video.IsScanning;
-            _scanMotion.Text = video.IsScanning ? Loc.T("Scanning {0}%", (video.ScanProgress * 100).ToString("0")) : Loc.T("Scan motion");
+            _scanMotion.Text = video.IsScanning ? Loc.T("Scanning {0}%", Math.Round((video.ScanProgress ?? 0) * 100)) : Loc.T("Scan motion");
             _outage.Enabled = idle;
             _remove.Enabled = idle;
 
