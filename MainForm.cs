@@ -37,6 +37,23 @@ public sealed partial class MainForm : Form, ICameraHost
     public MainForm()
     {
         InitializeComponent();
+        _language.SelectedIndex = (int)Loc.Current;     // before the handler can run twice over the same text
+        Loc.Apply(this);
+    }
+
+    /// <summary>The language combobox: switch the whole window, the camera panels included, at once.</summary>
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (_language.SelectedIndex < 0 || (AppLanguage)_language.SelectedIndex == Loc.Current)
+            return;
+
+        Loc.Set((AppLanguage)_language.SelectedIndex);
+        Loc.Apply(this);
+        UpdateTitle();
+        UpdateButtons();
+        UpdateFolderInfo();
+        foreach (var panel in _cameras.Controls.OfType<CameraPanel>())
+            panel.UpdateView();
     }
 
     // ===================================================================== ICameraHost
@@ -190,7 +207,7 @@ public sealed partial class MainForm : Form, ICameraHost
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "Open a project",
+            Title = Loc.T("Open a project"),
             Filter = ProjectFile.Filter,
             InitialDirectory = ProjectFolder()
         };
@@ -232,7 +249,7 @@ public sealed partial class MainForm : Form, ICameraHost
     {
         using var dialog = new FolderBrowserDialog
         {
-            Description = "Choose the folder with your camera videos",
+            Description = Loc.T("Choose the folder with your camera videos"),
             SelectedPath = Directory.Exists(_currentFolder) ? _currentFolder : string.Empty
         };
 
@@ -273,7 +290,7 @@ public sealed partial class MainForm : Form, ICameraHost
     {
         ErrorReporter.Report(ex, context);
         Log($"ERROR ({context}): {ex.Message}");
-        MessageBox.Show(this, ex.Message, context, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        MessageBox.Show(this, ex.Message, Loc.T(context), MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private string RequireMediaMtx()
@@ -337,7 +354,7 @@ public sealed partial class MainForm : Form, ICameraHost
             _files.EndUpdate();
         }
 
-        _folderInfo.Text = files.Count == 0 ? "No video files in this folder." : $"Checking {files.Count} file(s)...";
+        _folderInfo.Text = files.Count == 0 ? Loc.T("No video files in this folder.") : Loc.T("Checking {0} file(s)...", files.Count);
         Log($"Video folder: {folder} ({files.Count} video file(s)).");
 
         if (files.Count > 0)
@@ -395,7 +412,9 @@ public sealed partial class MainForm : Form, ICameraHost
         if (generation != _folderGeneration || IsDisposed)
             return;
 
-        _folderInfo.Text = $"{playable} playable video(s)" + (unplayable.Count > 0 ? $", {unplayable.Count} other file(s) hidden" : string.Empty) + ".";
+        _playableCount = playable;
+        _hiddenCount = unplayable.Count;
+        UpdateFolderInfo();
         if (unplayable.Count > 0)
             Log("Not playable, so not listed: " + string.Join("; ", unplayable));
     }
@@ -659,7 +678,7 @@ public sealed partial class MainForm : Form, ICameraHost
         {
             using var dialog = new SaveFileDialog
             {
-                Title = "Save the setup as a project",
+                Title = Loc.T("Save the setup as a project"),
                 Filter = ProjectFile.Filter,
                 DefaultExt = ProjectFile.Extension,
                 AddExtension = true,
@@ -792,10 +811,10 @@ public sealed partial class MainForm : Form, ICameraHost
             return true;
 
         string question = _projectPath is null
-            ? "Save these cameras and settings as a project, so they can be opened again next time?"
-            : $"Save the changes to {Path.GetFileName(_projectPath)}?";
+            ? Loc.T("Save these cameras and settings as a project, so they can be opened again next time?")
+            : Loc.T("Save the changes to {0}?", Path.GetFileName(_projectPath)!);
 
-        var answer = MessageBox.Show(this, question, action, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        var answer = MessageBox.Show(this, question, Loc.T(action), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
         return answer switch
         {
             DialogResult.Yes => SaveProject(_projectPath),
@@ -816,7 +835,19 @@ public sealed partial class MainForm : Form, ICameraHost
         : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
 
     private void UpdateTitle() =>
-        Text = _projectPath is null ? "MockRtsp - mock RTSP cameras" : $"MockRtsp - {Path.GetFileNameWithoutExtension(_projectPath)}";
+        Text = _projectPath is null ? Loc.T("MockRtsp - mock RTSP cameras") : Loc.T("MockRtsp - {0}", Path.GetFileNameWithoutExtension(_projectPath));
+
+    private int _playableCount = -1;                // -1: no folder checked yet; the info label keeps its own text
+    private int _hiddenCount;
+
+    private void UpdateFolderInfo()
+    {
+        if (_playableCount < 0)
+            return;
+
+        _folderInfo.Text = Loc.T("{0} playable video(s)", _playableCount)
+                           + (_hiddenCount > 0 ? Loc.T(", {0} other file(s) hidden", _hiddenCount) : string.Empty) + ".";
+    }
 
     /// <summary>
     /// Changes the videos a camera plays. Videos new to the app are opened (their saved settings,
@@ -1007,11 +1038,11 @@ public sealed partial class MainForm : Form, ICameraHost
     {
 
         if (video.IsScanning)
-            throw new InvalidOperationException($"{video.Name} is being scanned already.");
+            throw new InvalidOperationException(Loc.T("{0} is being scanned already.", video.Name));
 
         if (video.Skips.Count > 0 && MessageBox.Show(this,
-                $"Replace the {video.Skips.Count} skip(s) of {video.Name} with the result of a new motion scan?",
-                "Scan motion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                Loc.T("Replace the {0} skip(s) of {1} with the result of a new motion scan?", video.Skips.Count, video.Name),
+                Loc.T("Scan motion"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
         {
             return;
         }
@@ -1022,7 +1053,7 @@ public sealed partial class MainForm : Form, ICameraHost
     public async Task OpenInVlcAsync(CameraEntry entry)
     {
         if (!entry.Camera.IsOnline)
-            throw new InvalidOperationException("Start the camera first, then open it in VLC.");
+            throw new InvalidOperationException(Loc.T("Start the camera first, then open it in VLC."));
 
         // Opening VLC before MediaMTX serves the stream makes VLC show an error, so wait for it.
         bool live = false;
@@ -1192,9 +1223,8 @@ public sealed partial class MainForm : Form, ICameraHost
 
         if (video.SkipsMatchScan(before)
             || MessageBox.Show(this,
-                $"{video.Name} has skips you changed by hand. Pick its skips again from the saved motion data, "
-                + "with the new motion settings? Your changes would be replaced.",
-                "New motion settings", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                Loc.T("{0} has skips you changed by hand. Pick its skips again from the saved motion data, with the new motion settings? Your changes would be replaced.", video.Name),
+                Loc.T("New motion settings"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
         {
             video.ApplyMotionSettings(after);
         }
@@ -1313,8 +1343,8 @@ public sealed partial class MainForm : Form, ICameraHost
         _streamPath.Enabled = !_busy;
 
         _statusText.Text = serverUp
-            ? $"MediaMTX running on port {_server!.Port}  |  cameras: {_entries.Count}"
-            : _mediaMtxExe is null ? "MediaMTX not found" : "Server stopped";
+            ? Loc.T("MediaMTX running on port {0}  |  cameras: {1}", _server!.Port, _entries.Count)
+            : _mediaMtxExe is null ? Loc.T("MediaMTX not found") : Loc.T("Server stopped");
     }
 
     /// <summary>What a camera actually sends, e.g. "1280x720, 15 fps, 2000 kbps".</summary>

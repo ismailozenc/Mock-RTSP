@@ -26,13 +26,14 @@ public sealed partial class PlaylistDialog : Form
     public PlaylistDialog(IEnumerable<string> available, IEnumerable<string> playlist, string camera, IEnumerable<string> extensions)
     {
         InitializeComponent();
+        Loc.Apply(this);
 
-        Text = $"Playlist for {camera}";
+        Text = Loc.T("Playlist for {0}", camera);
         _available.Items.AddRange(available.Select(f => (object)new FileItem(f)).ToArray());
         _items.Items.AddRange(playlist.Select(f => (object)new FileItem(f)).ToArray());
 
         string patterns = string.Join(";", extensions.Select(e => "*" + e));
-        _filter = $"Videos ({patterns})|{patterns}|All files (*.*)|*.*";
+        _filter = Loc.T("Videos ({0})|{0}|All files (*.*)|*.*", patterns);
 
         if (_items.Items.Count > 0)
             _items.SelectedIndex = 0;
@@ -55,7 +56,7 @@ public sealed partial class PlaylistDialog : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "Add videos to the playlist",
+            Title = Loc.T("Add videos to the playlist"),
             Filter = _filter,
             Multiselect = true
         };
@@ -138,7 +139,7 @@ public sealed partial class PlaylistDialog : Form
     {
         if (_items.Items.Count == 0)
         {
-            MessageBox.Show(this, "Add at least one video.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, Loc.T("Add at least one video."), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 

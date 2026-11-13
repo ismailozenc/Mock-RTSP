@@ -23,6 +23,8 @@ public sealed partial class MainForm
     private Button _saveProject = null!;
     private Button _saveProjectAs = null!;
     private CheckBox _openAtStartup = null!;
+    private Label _lblLanguage = null!;
+    private ComboBox _language = null!;
     private FlowLayoutPanel _folderRow = null!;
     private Label _lblFolder = null!;
     private ComboBox _folder = null!;
@@ -77,6 +79,8 @@ public sealed partial class MainForm
         _saveProject = new Button();
         _saveProjectAs = new Button();
         _openAtStartup = new CheckBox();
+        _lblLanguage = new Label();
+        _language = new ComboBox();
         _folderRow = new FlowLayoutPanel();
         _lblFolder = new Label();
         _folder = new ComboBox();
@@ -151,11 +155,19 @@ public sealed partial class MainForm
         _openAtStartup.Margin = new Padding(10, 7, 3, 3);
         _openAtStartup.Text = "Reopen the last project at startup";
 
+        _lblLanguage.AutoSize = true;
+        _lblLanguage.Margin = new Padding(24, 8, 2, 0);
+        _lblLanguage.Text = "Language:";
+        _language.DropDownStyle = ComboBoxStyle.DropDownList;   // English / Türkçe, never typed
+        _language.Items.AddRange(Loc.Names);
+        _language.Margin = new Padding(0, 4, 3, 0);
+        _language.Width = 100;
+
         _serverRow.AutoSize = true;
         _serverRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _serverRow.Margin = new Padding(0, 0, 0, 2);
         _serverRow.WrapContents = true;
-        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton, _openProject, _saveProject, _saveProjectAs, _openAtStartup });
+        _serverRow.Controls.AddRange(new Control[] { _lblPort, _port, _startServer, _stopServer, _optionsButton, _openProject, _saveProject, _saveProjectAs, _openAtStartup, _lblLanguage, _language });
 
         // ================= Folder row =================
         _lblFolder.AutoSize = true;
@@ -302,6 +314,7 @@ public sealed partial class MainForm
         _saveProject.Click += new EventHandler(OnSaveProjectClick);
         _saveProjectAs.Click += new EventHandler(OnSaveProjectAsClick);
         _openAtStartup.CheckedChanged += new EventHandler(OnOpenAtStartupChanged);
+        _language.SelectedIndexChanged += new EventHandler(OnLanguageChanged);
         _folder.SelectionChangeCommitted += new EventHandler(OnFolderPicked);
         _folder.KeyDown += new KeyEventHandler(OnFolderKeyDown);
         _browseFolder.Click += new EventHandler(OnBrowseFolderClick);

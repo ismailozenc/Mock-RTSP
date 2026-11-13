@@ -32,6 +32,8 @@ public sealed partial class OptionsDialog : Form
     public OptionsDialog(StreamOptions current, string? videoName, StreamOptions? defaults)
     {
         InitializeComponent();
+        Loc.Apply(this);
+        Loc.ApplyTips(_tips, AllControls(this));
 
         _working = current.Clone();
         _defaults = defaults?.Clone();
@@ -47,13 +49,11 @@ public sealed partial class OptionsDialog : Form
     /// <summary>Only the settings a single video can have: no server tab, no app-wide options.</summary>
     private void ShowAsVideoSettings(string videoName)
     {
-        Text = "Settings for " + videoName;
+        Text = Loc.T("Settings for {0}", videoName);
         _tabs.TabPages.Remove(_tabMtx);
         _tabFfmpeg.Text = videoName;
-        _ffIntro.Text = $"Settings for this video only, saved next to it in {videoName}.mockrtsp.json. "
-                        + "Cameras playing it restart with the new settings, keeping position, pause and speed. "
-                        + "New motion settings pick skips again from the saved scan, without scanning again.";
-        _reset.Text = "Use defaults";
+        _ffIntro.Text = Loc.T("Settings for this video only, saved next to it in {0}.mockrtsp.json. Cameras playing it restart with the new settings, keeping position, pause and speed. New motion settings pick skips again from the saved scan, without scanning again.", videoName);
+        _reset.Text = Loc.T("Use defaults");
 
         // App-wide options stay in the main settings.
         _autoScan.Visible = false;
@@ -65,12 +65,15 @@ public sealed partial class OptionsDialog : Form
         ClientSize = new Size(ClientSize.Width, ClientSize.Height - 90);
     }
 
+    private static IEnumerable<Control> AllControls(Control root) =>
+        root.Controls.Cast<Control>().SelectMany(c => new[] { c }.Concat(AllControls(c)));
+
     private void FillComboBoxes()
     {
         _publishTransport.Items.AddRange(new object[] { "tcp", "udp" });
         _ffmpegLog.Items.AddRange(new object[] { "error", "warning", "info" });
         _mtxLog.Items.AddRange(new object[] { "error", "warn", "info", "debug" });
-        _transports.Items.AddRange(new object[] { "TCP and UDP", "TCP only", "UDP only" });
+        _transports.Items.AddRange(new object[] { Loc.T("TCP and UDP"), Loc.T("TCP only"), Loc.T("UDP only") });
     }
 
     private void LoadValues(StreamOptions o)
@@ -169,8 +172,8 @@ public sealed partial class OptionsDialog : Form
             var problems = _working.Validate();
             if (problems.Count > 0)
             {
-                MessageBox.Show(this, string.Join(Environment.NewLine, problems),
-                    "Check the settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, string.Join(Environment.NewLine, problems.Select(Loc.Translate)),
+                    Loc.T("Check the settings"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;                                 // stay open so the user can fix it
             }
 
@@ -180,7 +183,7 @@ public sealed partial class OptionsDialog : Form
         catch (Exception ex)
         {
             ErrorReporter.Report(ex, "Settings");
-            MessageBox.Show(this, ex.Message, "Settings", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, Loc.T("Settings"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 }

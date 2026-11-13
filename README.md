@@ -30,6 +30,10 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 
 Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`.
 
+### Language
+
+The **Language** box at the top right of the server row switches the whole interface between English and Türkçe at once, camera panels, dialogs and tooltips included. The choice is remembered in `%APPDATA%\MockRtsp\language.txt`; the first run follows the Windows display language. The log stays in English.
+
 ### Projects: keep the whole setup
 
 **Save project** keeps everything needed to get back to where you are: the port, the settings (defaults and server), the video folder, and every camera with its stream path, playlist, speed, position, pause and whether it is on. **Open project...** puts it all back: the server starts and the cameras are added. With **Reopen the last project at startup** ticked, the app does that by itself when it starts.

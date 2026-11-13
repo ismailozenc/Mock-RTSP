@@ -27,7 +27,7 @@ public sealed class ProjectCamera
 public sealed class ProjectFile
 {
     public const string Extension = ".mockrtsp-project";
-    public const string Filter = "MockRtsp projects (*" + Extension + ")|*" + Extension + "|All files (*.*)|*.*";
+    public static string Filter => Loc.T("MockRtsp projects (*{0})|*{0}|All files (*.*)|*.*", Extension);
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 

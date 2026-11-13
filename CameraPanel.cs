@@ -51,6 +51,7 @@ public sealed partial class CameraPanel : UserControl
     {
         _host = host;
         Entry = entry;
+        Loc.Apply(this);
         _path.Text = entry.StreamPath;
         UpdateView();
     }
@@ -88,15 +89,15 @@ public sealed partial class CameraPanel : UserControl
         {
             _shown = video;
 
-            _state.Text = !online ? "OFF" : camera.IsPaused ? "PAUSED" : "LIVE";
+            _state.Text = !online ? Loc.T("OFF") : camera.IsPaused ? Loc.T("PAUSED") : Loc.T("LIVE");
             _state.BackColor = !online ? Color.DimGray : camera.IsPaused ? Color.DarkOrange : Color.ForestGreen;
 
             var format = camera.Format;
             var settings = video.Effective(_host.Defaults);
-            string skips = video.Skips.Count == 0 ? "no skips" : $"{video.Skips.Count} skip(s)";
-            _details.Text = (several ? $"{playlist.Count} videos   " : $"{video.Name}   ")
+            string skips = video.Skips.Count == 0 ? Loc.T("no skips") : Loc.T("{0} skip(s)", video.Skips.Count);
+            _details.Text = (several ? Loc.T("{0} videos", playlist.Count) + "   " : $"{video.Name}   ")
                             + $"{format.Width}x{format.Height} {format.FrameRate} fps   "
-                            + $"{(video.HasOwnSettings ? "own settings" : "default settings")}   {skips}";
+                            + $"{(video.HasOwnSettings ? Loc.T("own settings") : Loc.T("default settings"))}   {skips}";
 
             // The playlist picker, rebuilt when the playlist changes.
             string names = string.Join("|", playlist.Select(v => v.Path));
@@ -115,13 +116,13 @@ public sealed partial class CameraPanel : UserControl
             if (_next.Visible != several)
                 _next.Visible = several;
 
-            _startStop.Text = online ? "Stop" : "Start";
+            _startStop.Text = online ? Loc.T("Stop") : Loc.T("Start");
             _startStop.Enabled = idle;
             _openVlc.Enabled = idle && online;
             _playlist.Enabled = idle;
             _settings.Enabled = idle;
             _scanMotion.Enabled = idle && !video.IsScanning;
-            _scanMotion.Text = video.IsScanning ? $"Scanning {video.ScanProgress * 100:0}%" : "Scan motion";
+            _scanMotion.Text = video.IsScanning ? Loc.T("Scanning {0}%", (video.ScanProgress * 100).ToString("0")) : Loc.T("Scan motion");
             _outage.Enabled = idle;
             _remove.Enabled = idle;
 
@@ -136,7 +137,7 @@ public sealed partial class CameraPanel : UserControl
             _skipEnd.Enabled = idle && Entry.PendingSkipStart is not null && ReferenceEquals(Entry.PendingSkipVideo, video);
             _timeline.Enabled = idle;
 
-            _playPause.Text = camera.IsPaused ? "Play" : "Pause";
+            _playPause.Text = camera.IsPaused ? Loc.T("Play") : Loc.T("Pause");
             _time.Text = $"{FormatTime(camera.Position)} / {FormatTime(camera.Duration)}";
 
             int speedIndex = Array.IndexOf(Speeds, camera.Speed);
