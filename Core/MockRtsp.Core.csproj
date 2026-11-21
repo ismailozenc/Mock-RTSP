@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What both apps share: the files next to each video, labels, skips, the timeline, previews,
+       and the files copied from Birel Plaka (BirelPlaka\SOURCE.txt). -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>MockRtsp.Core</AssemblyName>
+    <RootNamespace>MockRtsp</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Birel Plaka copies are internal (unchanged); the scanner uses them. -->
+    <InternalsVisibleTo Include="MockRtspScanner" />
+    <None Include="BirelPlaka\SOURCE.txt" />
+  </ItemGroup>
+
+</Project>

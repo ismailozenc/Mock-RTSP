@@ -23,20 +23,16 @@ public interface ICameraHost
     Task SimulateOutageAsync(CameraEntry entry, int seconds);
     Task EditVideoSettingsAsync(CameraEntry entry, VideoFile video);
     Task EditPlaylistAsync(CameraEntry entry);
-    Task EditPlatesAsync(CameraEntry entry, VideoFile video);
-
-    /// <summary>Labels the playing parts of a video with their vehicles; showAt picks the part shown first.</summary>
-    Task EditLabelsAsync(CameraEntry entry, VideoFile video, double? showAt);
 
     /// <summary>Live numbers for the camera, or null while the server is not reporting them.</summary>
     CameraStats? StatsFor(CameraEntry entry);
-    void ScanMotion(VideoFile video);
 }
 
 /// <summary>
 /// Everything for one camera in one place: its state and actions, a player row (video of the
-/// playlist, rewind, pause, back, forward, next, speed, skips, zoom) and its own timeline, which
-/// shows the video playing now. No camera needs selecting first.
+/// playlist, rewind, pause, back, forward, next, speed, zoom) and its own timeline, which
+/// shows the video playing now with its gaps and labels (made in Mock RTSP Scanner; only shown
+/// here). No camera needs selecting first.
 /// The layout lives in CameraPanel.Designer.cs.
 /// </summary>
 public sealed partial class CameraPanel : UserControl
@@ -45,7 +41,7 @@ public sealed partial class CameraPanel : UserControl
 
     private readonly ICameraHost? _host;
     private bool _updating;                 // set while code, not the user, changes the controls
-    private VideoFile? _shown;              // the video on the timeline: skip edits go to this one
+    private VideoFile? _shown;              // the video on the timeline (Video settings go to this one)
     private string _playlistShown = string.Empty;
 
     /// <summary>Parameterless constructor for the designer.</summary>
@@ -99,8 +95,7 @@ public sealed partial class CameraPanel : UserControl
             _state.BackColor = !online ? Color.DimGray : camera.IsPaused ? Color.DarkOrange : Color.ForestGreen;
 
             var format = camera.Format;
-            var settings = video.Effective(_host.Defaults);
-            string skips = video.Skips.Count == 0 ? "no skips" : $"{video.Skips.Count} skip(s)";
+            string skips = video.Motion is null ? "not scanned" : video.Skips.Count == 0 ? "no gaps" : $"{video.Skips.Count} gap(s)";
             string plates = video.Plates.Count == 0 ? string.Empty : $"   {video.Plates.Count} plate(s)";
             var labels = video.LabelSummary;
             plates += $"   {labels.Labelled}/{labels.Parts} part(s) labelled";
@@ -136,10 +131,6 @@ public sealed partial class CameraPanel : UserControl
             _openVlc.Enabled = idle && online;
             _playlist.Enabled = idle;
             _settings.Enabled = idle;
-            _scanMotion.Enabled = idle && !video.IsScanning;
-            _scanMotion.Text = video.IsScanning ? $"Scanning {video.ScanProgress * 100:0}%" : "Scan motion";
-            _plates.Enabled = idle;
-            _labels.Enabled = idle;
             _outage.Enabled = idle;
             _remove.Enabled = idle;
 
@@ -150,8 +141,6 @@ public sealed partial class CameraPanel : UserControl
             _forward10.Enabled = idle;
             _next.Enabled = idle;
             _speed.Enabled = idle;
-            _skipStart.Enabled = idle;
-            _skipEnd.Enabled = idle && Entry.PendingSkipStart is not null && ReferenceEquals(Entry.PendingSkipVideo, video);
             _timeline.Enabled = idle;
 
             _playPause.Text = camera.IsPaused ? "Play" : "Pause";
@@ -163,11 +152,9 @@ public sealed partial class CameraPanel : UserControl
 
             _timeline.SetSource(video.Previews, video.Duration);
             _timeline.SetSkipRanges(video.Skips);
-            _timeline.SetMotion(video.Motion, settings.MotionThresholdPercent);
+            _timeline.SetMotion(video.Motion, (video.MotionSettings ?? MotionSettings.Legacy).ThresholdPercent);
             _timeline.SetPlates(video.Plates);
             _timeline.SetLabels(video.Vehicles, video.EmptyParts);
-            _timeline.ScanProgress = video.ScanProgress;
-            _timeline.PendingStart = ReferenceEquals(Entry.PendingSkipVideo, video) ? Entry.PendingSkipStart : null;
             _timeline.Position = camera.Position.TotalSeconds;
             _timeline.Invalidate();                 // new preview frames may have arrived
         }
@@ -193,18 +180,6 @@ public sealed partial class CameraPanel : UserControl
         await DoAsync(entry => _host!.EditVideoSettingsAsync(entry, _shown ?? entry.Video), "Video settings");
 
     private async void OnPlaylistClick(object? sender, EventArgs e) => await DoAsync(entry => _host!.EditPlaylistAsync(entry), "Playlist");
-
-    private async void OnPlatesClick(object? sender, EventArgs e) =>
-        await DoAsync(entry => _host!.EditPlatesAsync(entry, _shown ?? entry.Video), "Plates");
-
-    private async void OnLabelsClick(object? sender, EventArgs e) =>
-        await DoAsync(entry => _host!.EditLabelsAsync(entry, _shown ?? entry.Video, null), "Labels");
-
-    /// <summary>Double-click (or the right-click menu) on a playing part of the timeline: label that part.</summary>
-    private async void OnTimelineLabelPart(object? sender, double seconds) =>
-        await DoAsync(entry => _host!.EditLabelsAsync(entry, _shown ?? entry.Video, seconds), "Labels");
-
-    private void OnScanMotionClick(object? sender, EventArgs e) => Do(entry => _host!.ScanMotion(_shown ?? entry.Video), "Scan motion");
 
     private async void OnOutageClick(object? sender, EventArgs e) =>
         await DoAsync(entry => _host!.SimulateOutageAsync(entry, (int)_outageSeconds.Value), "Simulate outage");
@@ -290,41 +265,6 @@ public sealed partial class CameraPanel : UserControl
     private void OnZoomOutClick(object? sender, EventArgs e) => _timeline.ZoomOut();
 
     private void OnZoomFitClick(object? sender, EventArgs e) => _timeline.ZoomToFit();
-
-    // ===================================================================== skips
-
-    private void OnSkipStartClick(object? sender, EventArgs e) => Do(entry =>
-    {
-        entry.PendingSkipVideo = entry.Video;
-        entry.PendingSkipStart = entry.Camera.Position.TotalSeconds;
-        Say($"skip starts at {FormatPrecise(entry.PendingSkipStart.Value)}. Move to where it should end and click Skip end.");
-    }, "Skip start");
-
-    private void OnSkipEndClick(object? sender, EventArgs e) => Do(entry =>
-    {
-        if (entry.PendingSkipStart is not double start || entry.PendingSkipVideo is not { } video)
-            throw new InvalidOperationException("Click Skip start first, at the moment the skip should begin.");
-
-        if (!ReferenceEquals(video, entry.Video))
-            throw new InvalidOperationException(
-                $"The skip was started in {video.Name}, but {entry.Video.Name} is playing now. Click Skip start again.");
-
-        double end = entry.Camera.Position.TotalSeconds;
-        entry.PendingSkipStart = null;
-        entry.PendingSkipVideo = null;
-
-        if (Math.Abs(end - start) < SkipRanges.MinLength)
-            throw new InvalidOperationException("The skip is too short. Move the playhead further from where it starts.");
-
-        video.SetSkips(video.Skips.Append(new SkipRange(Math.Min(start, end), Math.Max(start, end))));
-    }, "Skip end");
-
-    /// <summary>
-    /// The user drew, moved or deleted skip ranges on this timeline. They belong to the video the
-    /// timeline shows, even if the playlist has moved on to the next one meanwhile.
-    /// </summary>
-    private void OnTimelineSkipsChanged(object? sender, EventArgs e) =>
-        Do(entry => (_shown ?? entry.Video).SetSkips(_timeline.SkipRanges), "Skip ranges");
 
     // ===================================================================== helpers
 

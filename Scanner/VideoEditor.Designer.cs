@@ -2,16 +2,30 @@
 
 namespace MockRtsp;
 
-// Layout: one grid docked Fill, two columns. Row 0 the summary (both columns). Row 1 (the only
-// row that grows): on the left the player showing the selected part, the plate reading area's
-// buttons and the list of playing parts under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
-// moving between parts, reading plates, prefilling from them and exporting, row 3 OK and Cancel. Under the vehicles: the
-// cars of the part found by the plate scan, the readings of the selected car, and their buttons.
-public sealed partial class LabelsDialog
+// Layout: one grid docked Fill, two columns. Across both columns: row 0 the video's name and scan
+// state, row 1 the timeline (gaps, motion graph, plates, labels strip), row 2 the gap settings,
+// row 3 the summary of the labels. Row 4 (the only row that grows): on the left the player showing
+// the selected part, the plate reading area's buttons and the list of playing parts under it; on the
+// right the selected part's vehicles with their buttons, the cars read in the part, the readings of
+// the selected car and their buttons. Row 5: moving between parts, ground-truth plates, prefilling,
+// exporting, and the status line.
+public sealed partial class VideoEditor
 {
     private System.ComponentModel.IContainer? components = null;
 
     private TableLayoutPanel _grid = null!;
+    private Label _title = null!;
+    private Timeline _timeline = null!;
+    private FlowLayoutPanel _gapRow = null!;
+    private Label _lblThreshold = null!;
+    private NumericUpDown _threshold = null!;
+    private Label _lblMinGap = null!;
+    private NumericUpDown _minGap = null!;
+    private Label _lblKeep = null!;
+    private NumericUpDown _keep = null!;
+    private Button _pickGaps = null!;
+    private Label _gapNote = null!;
+    private Button _groundTruth = null!;
     private Label _summary = null!;
     private TableLayoutPanel _left = null!;
     private PartPlayer _player = null!;
@@ -38,9 +52,6 @@ public sealed partial class LabelsDialog
     private Button _addVehicle = null!;
     private Button _removeVehicle = null!;
     private CheckBox _noVehicles = null!;
-    private FlowLayoutPanel _playRow = null!;
-    private Button _play = null!;
-    private Label _playNote = null!;
     private Label _carsTitle = null!;
     private ImageList _plateImages = null!;
     private ListView _cars = null!;
@@ -57,18 +68,13 @@ public sealed partial class LabelsDialog
     private Button _useCar = null!;
     private Button _useForSelected = null!;
     private Button _useAll = null!;
-    private Button _readPlates = null!;
     private Button _prefill = null!;
-    private ProgressBar _scanProgress = null!;
     private Label _scanStatus = null!;
     private FlowLayoutPanel _tools = null!;
     private Button _previousUnlabelled = null!;
     private Button _nextUnlabelled = null!;
     private Button _deleteOutside = null!;
     private Button _export = null!;
-    private FlowLayoutPanel _bottom = null!;
-    private Button _ok = null!;
-    private Button _cancel = null!;
 
     protected override void Dispose(bool disposing)
     {
@@ -84,6 +90,18 @@ public sealed partial class LabelsDialog
     {
         components = new System.ComponentModel.Container();
         _grid = new TableLayoutPanel();
+        _title = new Label();
+        _timeline = new Timeline();
+        _gapRow = new FlowLayoutPanel();
+        _lblThreshold = new Label();
+        _threshold = new NumericUpDown();
+        _lblMinGap = new Label();
+        _minGap = new NumericUpDown();
+        _lblKeep = new Label();
+        _keep = new NumericUpDown();
+        _pickGaps = new Button();
+        _gapNote = new Label();
+        _groundTruth = new Button();
         _summary = new Label();
         _left = new TableLayoutPanel();
         _player = new PartPlayer();
@@ -110,9 +128,6 @@ public sealed partial class LabelsDialog
         _addVehicle = new Button();
         _removeVehicle = new Button();
         _noVehicles = new CheckBox();
-        _playRow = new FlowLayoutPanel();
-        _play = new Button();
-        _playNote = new Label();
         _carsTitle = new Label();
         _plateImages = new ImageList(components);
         _cars = new ListView();
@@ -129,30 +144,84 @@ public sealed partial class LabelsDialog
         _useCar = new Button();
         _useForSelected = new Button();
         _useAll = new Button();
-        _readPlates = new Button();
         _prefill = new Button();
-        _scanProgress = new ProgressBar();
         _scanStatus = new Label();
         _tools = new FlowLayoutPanel();
         _previousUnlabelled = new Button();
         _nextUnlabelled = new Button();
         _deleteOutside = new Button();
         _export = new Button();
-        _bottom = new FlowLayoutPanel();
-        _ok = new Button();
-        _cancel = new Button();
 
         ((System.ComponentModel.ISupportInitialize)_table).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)_threshold).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)_minGap).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)_keep).BeginInit();
         _grid.SuspendLayout();
+        _gapRow.SuspendLayout();
         _left.SuspendLayout();
         _areaTools.SuspendLayout();
         _editor.SuspendLayout();
         _partTools.SuspendLayout();
-        _playRow.SuspendLayout();
         _carTools.SuspendLayout();
         _tools.SuspendLayout();
-        _bottom.SuspendLayout();
         SuspendLayout();
+
+        // ================= Video, timeline and gap settings =================
+        _title.AutoSize = true;
+        _title.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        _title.Margin = new Padding(0, 0, 0, 6);
+        _title.Text = "Select a video on the left.";
+
+        _timeline.Dock = DockStyle.Fill;
+        _timeline.Margin = new Padding(0);
+
+        _lblThreshold.AutoSize = true;
+        _lblThreshold.Margin = new Padding(0, 7, 3, 3);
+        _lblThreshold.Text = "Gaps: movement needed (% of the picture)";
+        _threshold.DecimalPlaces = 1;
+        _threshold.Increment = 0.1M;
+        _threshold.Maximum = 25;
+        _threshold.Minimum = 0.1M;
+        _threshold.Value = 0.3M;
+        _threshold.Width = 64;
+        _lblMinGap.AutoSize = true;
+        _lblMinGap.Margin = new Padding(12, 7, 3, 3);
+        _lblMinGap.Text = "gaps of at least (s)";
+        _minGap.DecimalPlaces = 1;
+        _minGap.Increment = 0.5M;
+        _minGap.Maximum = 3600;
+        _minGap.Minimum = 1;
+        _minGap.Value = 3;
+        _minGap.Width = 64;
+        _lblKeep.AutoSize = true;
+        _lblKeep.Margin = new Padding(12, 7, 3, 3);
+        _lblKeep.Text = "kept around movement (s)";
+        _keep.DecimalPlaces = 1;
+        _keep.Increment = 0.5M;
+        _keep.Maximum = 60;
+        _keep.Value = 1;
+        _keep.Width = 64;
+        _pickGaps.AutoSize = true;
+        _pickGaps.Margin = new Padding(12, 3, 3, 3);
+        _pickGaps.Text = "Pick gaps again";
+        _gapNote.AutoSize = true;
+        _gapNote.ForeColor = SystemColors.GrayText;
+        _gapNote.Margin = new Padding(6, 7, 3, 3);
+        _gapNote.Text = "";
+
+        _gapRow.AutoSize = true;
+        _gapRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _gapRow.Dock = DockStyle.Fill;
+        _gapRow.Margin = new Padding(0, 4, 0, 4);
+        _gapRow.WrapContents = true;
+        _gapRow.Controls.Add(_lblThreshold);
+        _gapRow.Controls.Add(_threshold);
+        _gapRow.Controls.Add(_lblMinGap);
+        _gapRow.Controls.Add(_minGap);
+        _gapRow.Controls.Add(_lblKeep);
+        _gapRow.Controls.Add(_keep);
+        _gapRow.Controls.Add(_pickGaps);
+        _gapRow.Controls.Add(_gapNote);
 
         // ================= Summary =================
         _summary.AutoSize = true;
@@ -274,20 +343,7 @@ public sealed partial class LabelsDialog
         _partTools.Controls.Add(_removeVehicle);
         _partTools.Controls.Add(_noVehicles);
 
-        _play.AutoSize = true;
-        _play.Text = "Move the camera here";
-        _playNote.AutoSize = true;
-        _playNote.ForeColor = SystemColors.GrayText;
-        _playNote.Margin = new Padding(6, 8, 3, 3);
-        _playNote.MaximumSize = new Size(330, 0);
-        _playNote.Text = "Jumps the camera's stream to the start of this part.";
 
-        _playRow.AutoSize = true;
-        _playRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        _playRow.Margin = new Padding(0, 2, 0, 0);
-        _playRow.WrapContents = false;
-        _playRow.Controls.Add(_play);
-        _playRow.Controls.Add(_playNote);
 
         // ================= Plates read in this part =================
         _carsTitle.AutoSize = true;
@@ -366,7 +422,6 @@ public sealed partial class LabelsDialog
         _editor.Controls.Add(_partTitle, 0, 0);
         _editor.Controls.Add(_table, 0, 1);
         _editor.Controls.Add(_partTools, 0, 2);
-        _editor.Controls.Add(_playRow, 0, 3);
         _editor.Controls.Add(_carsTitle, 0, 4);
         _editor.Controls.Add(_cars, 0, 5);
         _editor.Controls.Add(_readings, 0, 6);
@@ -379,23 +434,21 @@ public sealed partial class LabelsDialog
         _nextUnlabelled.Text = "Next to label >";
         _deleteOutside.AutoSize = true;
         _deleteOutside.Margin = new Padding(18, 3, 3, 3);
-        _deleteOutside.Text = "Delete labels in skipped parts";
+        _deleteOutside.Text = "Delete labels in gaps";
         _export.AutoSize = true;
         _export.Margin = new Padding(18, 3, 3, 3);
         _export.Text = "Export CSV...";
-        _readPlates.AutoSize = true;
-        _readPlates.Margin = new Padding(18, 3, 3, 3);
-        _readPlates.Text = "Read plates in every part";
+        _groundTruth.AutoSize = true;
+        _groundTruth.Margin = new Padding(18, 3, 3, 3);
+        _groundTruth.Text = "Ground-truth plates...";
         _prefill.AutoSize = true;
         _prefill.Enabled = false;
+        _prefill.Margin = new Padding(18, 3, 3, 3);
         _prefill.Text = "Prefill unlabelled parts";
-        _scanProgress.Margin = new Padding(6, 6, 3, 3);
-        _scanProgress.Size = new Size(140, 18);
-        _scanProgress.Visible = false;
         _scanStatus.AutoSize = true;
         _scanStatus.ForeColor = SystemColors.GrayText;
         _scanStatus.Margin = new Padding(6, 3, 3, 3);
-        _scanStatus.MaximumSize = new Size(360, 0);
+        _scanStatus.MaximumSize = new Size(520, 0);
         _scanStatus.Text = "";
 
         _tools.AutoSize = true;
@@ -406,48 +459,36 @@ public sealed partial class LabelsDialog
         _tools.Controls.Add(_nextUnlabelled);
         _tools.Controls.Add(_deleteOutside);
         _tools.Controls.Add(_export);
-        _tools.Controls.Add(_readPlates);
+        _tools.Controls.Add(_groundTruth);
         _tools.Controls.Add(_prefill);
-        _tools.Controls.Add(_scanProgress);
         _tools.Controls.Add(_scanStatus);
 
-        // ================= OK and Cancel =================
-        _cancel.DialogResult = DialogResult.Cancel;
-        _cancel.Margin = new Padding(6, 0, 0, 0);
-        _cancel.Size = new Size(96, 30);
-        _cancel.Text = "Cancel";
-        _ok.Margin = new Padding(6, 0, 0, 0);
-        _ok.Size = new Size(96, 30);
-        _ok.Text = "OK";
-
-        _bottom.AutoSize = true;
-        _bottom.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        _bottom.Anchor = AnchorStyles.Right;
-        _bottom.FlowDirection = FlowDirection.RightToLeft;
-        _bottom.Margin = new Padding(0, 10, 0, 0);
-        _bottom.WrapContents = false;
-        _bottom.Controls.Add(_cancel);
-        _bottom.Controls.Add(_ok);
 
         // ================= Grid =================
         _grid.ColumnCount = 2;
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 57F));
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 43F));
         _grid.Dock = DockStyle.Fill;
-        _grid.Padding = new Padding(12);
-        _grid.RowCount = 4;
+        _grid.Padding = new Padding(8);
+        _grid.RowCount = 6;
+        _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 118F));
+        _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
         _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _grid.Controls.Add(_summary, 0, 0);
-        _grid.Controls.Add(_left, 0, 1);
-        _grid.Controls.Add(_editor, 1, 1);
-        _grid.Controls.Add(_tools, 0, 2);
-        _grid.Controls.Add(_bottom, 0, 3);
+        _grid.Controls.Add(_title, 0, 0);
+        _grid.Controls.Add(_timeline, 0, 1);
+        _grid.Controls.Add(_gapRow, 0, 2);
+        _grid.Controls.Add(_summary, 0, 3);
+        _grid.Controls.Add(_left, 0, 4);
+        _grid.Controls.Add(_editor, 1, 4);
+        _grid.Controls.Add(_tools, 0, 5);
+        _grid.SetColumnSpan(_title, 2);
+        _grid.SetColumnSpan(_timeline, 2);
+        _grid.SetColumnSpan(_gapRow, 2);
         _grid.SetColumnSpan(_summary, 2);
         _grid.SetColumnSpan(_tools, 2);
-        _grid.SetColumnSpan(_bottom, 2);
 
         // ================= Events =================
         _partList.ItemSelectionChanged += new ListViewItemSelectionChangedEventHandler(OnPartSelectionChanged);
@@ -457,12 +498,10 @@ public sealed partial class LabelsDialog
         _table.CellDoubleClick += new DataGridViewCellEventHandler(OnCellDoubleClick);
         _addVehicle.Click += new EventHandler(OnAddVehicleClick);
         _removeVehicle.Click += new EventHandler(OnRemoveVehicleClick);
-        _play.Click += new EventHandler(OnPlayClick);
         _previousUnlabelled.Click += new EventHandler(OnPreviousUnlabelledClick);
         _nextUnlabelled.Click += new EventHandler(OnNextUnlabelledClick);
         _deleteOutside.Click += new EventHandler(OnDeleteOutsideClick);
         _export.Click += new EventHandler(OnExportClick);
-        _ok.Click += new EventHandler(OnOkClick);
         _cars.SelectedIndexChanged += new EventHandler(OnCarSelected);
         _cars.Resize += new EventHandler(OnCarsResize);
         _cars.DoubleClick += new EventHandler(OnUseCarClick);
@@ -470,8 +509,16 @@ public sealed partial class LabelsDialog
         _useCar.Click += new EventHandler(OnUseCarClick);
         _useForSelected.Click += new EventHandler(OnUseForSelectedClick);
         _useAll.Click += new EventHandler(OnUseAllClick);
-        _readPlates.Click += new EventHandler(OnReadPlatesClick);
         _prefill.Click += new EventHandler(OnPrefillClick);
+        _groundTruth.Click += new EventHandler(OnGroundTruthClick);
+        _pickGaps.Click += new EventHandler(OnPickGapsClick);
+        _table.CellEndEdit += new DataGridViewCellEventHandler(OnCellEndEdit);
+        _table.CurrentCellDirtyStateChanged += new EventHandler(OnCurrentCellDirty);
+        _noVehicles.CheckedChanged += new EventHandler(OnNoVehiclesChanged);
+        _player.PositionChanged += new EventHandler(OnPlayerPositionChanged);
+        _timeline.SeekRequested += new EventHandler<double>(OnTimelineSeek);
+        _timeline.SkipRangesChanged += new EventHandler(OnTimelineSkipsChanged);
+        _timeline.LabelPartRequested += new EventHandler<double>(OnTimelineLabelPart);
         _player.AreaChanged += new EventHandler(OnAreaChanged);
         _player.EditingChanged += new EventHandler(OnAreaEditingChanged);
         _editDetection.Click += new EventHandler(OnEditDetectionClick);
@@ -480,27 +527,21 @@ public sealed partial class LabelsDialog
         _removePerspective.Click += new EventHandler(OnRemovePerspectiveClick);
         _fromBirel.Click += new EventHandler(OnFromBirelClick);
 
-        // ================= Form =================
-        AcceptButton = _ok;
+        // ================= Control =================
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
-        CancelButton = _cancel;
-        ClientSize = new Size(1320, 840);
         Controls.Add(_grid);
         Font = new Font("Segoe UI", 9F);
-        MaximizeBox = true;
-        MinimizeBox = false;
-        MinimumSize = new Size(1060, 680);
-        ShowIcon = false;
-        ShowInTaskbar = false;
-        StartPosition = FormStartPosition.CenterParent;
-        Text = "Labels";
+        Size = new Size(1100, 820);
 
         ((System.ComponentModel.ISupportInitialize)_table).EndInit();
+        ((System.ComponentModel.ISupportInitialize)_threshold).EndInit();
+        ((System.ComponentModel.ISupportInitialize)_minGap).EndInit();
+        ((System.ComponentModel.ISupportInitialize)_keep).EndInit();
+        _gapRow.ResumeLayout(false);
+        _gapRow.PerformLayout();
         _partTools.ResumeLayout(false);
         _partTools.PerformLayout();
-        _playRow.ResumeLayout(false);
-        _playRow.PerformLayout();
         _carTools.ResumeLayout(false);
         _carTools.PerformLayout();
         _editor.ResumeLayout(false);
@@ -509,7 +550,6 @@ public sealed partial class LabelsDialog
         _areaTools.PerformLayout();
         _left.ResumeLayout(false);
         _tools.ResumeLayout(false);
-        _bottom.ResumeLayout(false);
         _grid.ResumeLayout(false);
         _grid.PerformLayout();
         ResumeLayout(false);

@@ -51,12 +51,10 @@ public sealed partial class OptionsDialog : Form
         _tabs.TabPages.Remove(_tabMtx);
         _tabFfmpeg.Text = videoName;
         _ffIntro.Text = $"Settings for this video only, saved next to it in {videoName}.mockrtsp.json. "
-                        + "Cameras playing it restart with the new settings, keeping position, pause and speed. "
-                        + "New motion settings pick skips again from the saved scan, without scanning again.";
+                        + "Cameras playing it restart with the new settings, keeping position, pause and speed.";
         _reset.Text = "Use defaults";
 
         // App-wide options stay in the main settings.
-        _autoScan.Visible = false;
         _hdrPublish.Visible = false;
         _lblPublishTransport.Visible = false;
         _publishTransport.Visible = false;
@@ -84,10 +82,6 @@ public sealed partial class OptionsDialog : Form
     private void LoadValues(StreamOptions o)
     {
         _loop.Checked = o.Loop;
-        _autoScan.Checked = o.AutoScanMotion;
-        SetValue(_motionThreshold, o.MotionThresholdPercent);
-        SetValue(_minStill, o.MinStillSeconds);
-        SetValue(_motionPadding, o.MotionPaddingSeconds);
         SetValue(_bitrate, o.BitrateKbps);
         SetValue(_keyframe, o.KeyframeInterval);
         SetValue(_width, o.Width);
@@ -127,19 +121,12 @@ public sealed partial class OptionsDialog : Form
         CommitTyped(_height);
         CommitTyped(_frameRate);
         CommitTyped(_readTimeout);
-        CommitTyped(_motionThreshold);
-        CommitTyped(_minStill);
-        CommitTyped(_motionPadding);
         CommitTyped(_writeTimeout);
         CommitTyped(_subWidth);
         CommitTyped(_subRate);
         CommitTyped(_subBitrate);
 
         _working.Loop = _loop.Checked;
-        _working.AutoScanMotion = _autoScan.Checked;
-        _working.MotionThresholdPercent = (double)_motionThreshold.Value;
-        _working.MinStillSeconds = (double)_minStill.Value;
-        _working.MotionPaddingSeconds = (double)_motionPadding.Value;
         _working.BitrateKbps = (int)_bitrate.Value;
         _working.KeyframeInterval = (int)_keyframe.Value;
         _working.Width = (int)_width.Value;

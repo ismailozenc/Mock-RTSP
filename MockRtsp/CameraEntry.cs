@@ -30,12 +30,6 @@ public sealed class CameraEntry
     /// <summary>The VLC window opened for this camera, if any. Reopened after a restart.</summary>
     public Process? Vlc { get; set; }
 
-    /// <summary>A skip range started with Skip start, waiting for Skip end. Null for none.</summary>
-    public double? PendingSkipStart { get; set; }
-
-    /// <summary>The video the pending skip range belongs to.</summary>
-    public VideoFile? PendingSkipVideo { get; set; }
-
     public bool Plays(VideoFile video) => _playlist.Contains(video);
 
     /// <summary>Replaces the playlist, and the camera's with it, keeping each video's skips.</summary>
@@ -51,12 +45,6 @@ public sealed class CameraEntry
         {
             Camera.SetSkipRanges(video.Path, video.Skips);
             Camera.SetPlates(video.Path, video.Plates);
-        }
-
-        if (PendingSkipVideo is not null && !_playlist.Contains(PendingSkipVideo))
-        {
-            PendingSkipStart = null;
-            PendingSkipVideo = null;
         }
     }
 }

@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The scanner: finds the gaps (still parts), plates and directions of videos, and edits them. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <AssemblyName>MockRtsp</AssemblyName>
+    <AssemblyName>MockRtspScanner</AssemblyName>
     <RootNamespace>MockRtsp</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -12,18 +13,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Birel Plaka's plate detector and OCR (models\, see BirelPlaka\SOURCE.txt), for Read plates. -->
+    <ProjectReference Include="..\Core\MockRtsp.Core.csproj" />
+    <!-- Birel Plaka's plate detector and OCR (models\, see Core\BirelPlaka\SOURCE.txt). -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
     <None Include="models\**" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="BirelPlaka\SOURCE.txt" />
   </ItemGroup>
 
-  <!-- If the project folder has mediamtx\ and ffmpeg\ folders, copy them next to MockRtsp.exe on build. -->
-  <ItemGroup Condition="Exists('mediamtx')">
-    <None Include="mediamtx\**" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('ffmpeg')">
-    <None Include="ffmpeg\**" CopyToOutputDirectory="PreserveNewest" />
+  <!-- ffmpeg\ in the solution folder is copied next to MockRtspScanner.exe on build. -->
+  <ItemGroup Condition="Exists('..\ffmpeg')">
+    <None Include="..\ffmpeg\**" Link="ffmpeg\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

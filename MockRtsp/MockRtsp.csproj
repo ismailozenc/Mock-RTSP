@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The RTSP app: mock cameras streaming video files through MediaMTX. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>MockRtsp</AssemblyName>
+    <RootNamespace>MockRtsp</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\MockRtsp.Core.csproj" />
+  </ItemGroup>
+
+  <!-- mediamtx\ and ffmpeg\ in the solution folder are copied next to MockRtsp.exe on build. -->
+  <ItemGroup Condition="Exists('..\mediamtx')">
+    <None Include="..\mediamtx\**" Link="mediamtx\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\ffmpeg')">
+    <None Include="..\ffmpeg\**" Link="ffmpeg\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

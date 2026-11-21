@@ -44,7 +44,6 @@ public sealed partial class MainForm
     private Label _lblStreamPath = null!;
     private TextBox _streamPath = null!;
     private Button _addCamera = null!;
-    private Button _labelFile = null!;
     private TableLayoutPanel _camerasLayout = null!;
     private Label _lblCameras = null!;
     private FlowLayoutPanel _cameras = null!;
@@ -100,7 +99,6 @@ public sealed partial class MainForm
         _lblStreamPath = new Label();
         _streamPath = new TextBox();
         _addCamera = new Button();
-        _labelFile = new Button();
         _camerasLayout = new TableLayoutPanel();
         _lblCameras = new Label();
         _cameras = new FlowLayoutPanel();
@@ -199,7 +197,7 @@ public sealed partial class MainForm
         _colLength.Width = 56;
         _colPicture.Text = "Picture";
         _colPicture.Width = 104;
-        _colSkips.Text = "Skips";
+        _colSkips.Text = "Gaps and labels";
         _colSkips.Width = 140;
         _colCamera.Text = "Camera";
         _colCamera.Width = 88;
@@ -218,16 +216,13 @@ public sealed partial class MainForm
         _streamPath.Width = 200;
         _addCamera.AutoSize = true;
         _addCamera.Text = "Add camera";
-        _labelFile.AutoSize = true;
-        _labelFile.Margin = new Padding(12, 3, 3, 3);
-        _labelFile.Text = "Label parts...";
 
         _addRow.AutoSize = true;
         _addRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _addRow.Dock = DockStyle.Fill;
         _addRow.Margin = new Padding(0, 4, 0, 0);
         _addRow.WrapContents = true;
-        _addRow.Controls.AddRange(new Control[] { _lblStreamPath, _streamPath, _addCamera, _labelFile });
+        _addRow.Controls.AddRange(new Control[] { _lblStreamPath, _streamPath, _addCamera });
 
         _filesLayout.ColumnCount = 1;
         _filesLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
@@ -320,7 +315,6 @@ public sealed partial class MainForm
         _files.DoubleClick += new EventHandler(OnAddCameraClick);
         _files.SelectedIndexChanged += new EventHandler(OnFilesSelectionChanged);
         _addCamera.Click += new EventHandler(OnAddCameraClick);
-        _labelFile.Click += new EventHandler(OnLabelFileClick);
         _cameras.Resize += new EventHandler(OnCamerasResize);
 
         // Timer: refreshes the camera panels and picks up finished scans, four times a second.

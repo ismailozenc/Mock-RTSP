@@ -6,12 +6,6 @@ namespace MockRtsp;
 /// </summary>
 public sealed partial class MainForm : Form, ICameraHost
 {
-    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".ts", ".mts", ".m2ts", ".flv", ".wmv", ".webm",
-        ".h264", ".264", ".h265", ".265", ".hevc"
-    };
-
     // Found in the "mediamtx" and "ffmpeg" folders next to the program when the form loads. Null if missing.
     private string? _mediaMtxExe;
     private string? _ffmpegExe;
@@ -170,7 +164,7 @@ public sealed partial class MainForm : Form, ICameraHost
             }
 
             foreach (var video in _videos.Values.ToList())
-                video.Poll(_options);                   // applies finished motion scans
+                video.Poll();                           // reads the file again when the scanner saved it
 
             PollStats();
 
@@ -247,113 +241,6 @@ public sealed partial class MainForm : Form, ICameraHost
                 Log($"ERROR: could not write the ground-truth log in {_groundTruth.Folder} ({ex.Message}). "
                     + "Check the folder in Settings > Server.");
             }
-        }
-    }
-
-    /// <summary>One video's ground-truth plates, saved next to it.</summary>
-    public Task EditPlatesAsync(CameraEntry entry, VideoFile video)
-    {
-        double playhead = ReferenceEquals(entry.Video, video) ? entry.Camera.Position.TotalSeconds : 0;
-
-        using var dialog = new PlatesDialog(video.Name, video.Plates, playhead, video.Duration);
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            video.SetPlates(dialog.Plates);
-
-        return Task.CompletedTask;
-    }
-
-    /// <summary>One video's vehicle labels per playing part, from its camera panel or its timeline.</summary>
-    public Task EditLabelsAsync(CameraEntry entry, VideoFile video, double? showAt)
-    {
-        ShowLabels(video, ReferenceEquals(entry.Video, video) ? entry : null, showAt);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// "Label parts..." under the video list: labels the selected video without needing a camera.
-    /// A video not scanned yet is offered a scan first, since its playing parts come from the scan.
-    /// </summary>
-    private void OnLabelFileClick(object? sender, EventArgs e) => Safe(() =>
-    {
-        string file = _files.SelectedItems.Cast<ListViewItem>().Select(i => (string)i.Tag!).FirstOrDefault()
-            ?? throw new InvalidOperationException("Select a video in the list first.");
-
-        var video = OpenVideo(file);
-        if (video.IsScanning)
-        {
-            // Kept open, so the scan finishes; its parts are ready next time.
-            throw new InvalidOperationException(
-                $"{video.Name} is being scanned for movement ({video.ScanProgress * 100:0}%). Its playing parts come from the scan: "
-                + "click Label parts... again when it is done (see the log).");
-        }
-
-        if (video.Motion is null)
-        {
-            var answer = MessageBox.Show(this,
-                $"{video.Name} has not been scanned for movement, so it is one playing part from start to end.\n\n"
-                + "Scan it now? (Yes: scan, then click Label parts... again. No: label it as one part.)",
-                "Label parts", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (answer == DialogResult.Cancel)
-            {
-                ReleaseVideoIfUnused(video);
-                return;
-            }
-
-            if (answer == DialogResult.Yes)
-            {
-                video.StartScan(automatic: false);
-                return;
-            }
-        }
-
-        try
-        {
-            ShowLabels(video, _entries.FirstOrDefault(entry => ReferenceEquals(entry.Video, video)), null);
-        }
-        finally
-        {
-            ReleaseVideoIfUnused(video);
-        }
-    }, "Label parts");
-
-    /// <summary>
-    /// The labels dialog for a video. Its player plays the parts straight from the file; with a
-    /// camera playing the video, "Move the camera here" jumps the camera too.
-    /// </summary>
-    private void ShowLabels(VideoFile video, CameraEntry? camera, double? showAt)
-    {
-        Func<double>? position = camera is null ? null : () => camera.Camera.Position.TotalSeconds;
-        Action<double>? seek = camera is null
-            ? null
-            : seconds =>
-            {
-                camera.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
-                Log($"'{camera.StreamPath}': moved to the part at {PlateMarks.FormatTime(seconds)} for labelling.");
-            };
-
-        // Plates read earlier, and the scanner for reading them (Birel Plaka's models in the models folder).
-        PlateScan? plateScan = null;
-        try
-        {
-            plateScan = PlateScanFile.Load(video.Path);
-        }
-        catch (InvalidDataException ex)
-        {
-            Log($"{video.Name}: the plates read earlier cannot be shown: {ex.Message}");
-        }
-
-        string models = Path.Combine(AppContext.BaseDirectory, "models");
-        string? ffmpeg = _ffmpegExe;
-        Func<PlateScanner>? createScanner = ffmpeg is not null && File.Exists(Path.Combine(models, PlateScanSettings.DetectorFile))
-            ? () => new PlateScanner(ffmpeg, models, PlateScanSettings.BirelPlakaFactory)
-            : null;
-
-        using var dialog = new LabelsDialog(video.Path, video.Info, _ffmpegExe, video.Skips, video.Vehicles, video.EmptyParts,
-            position, showAt, seek, plateScan, createScanner, video.ReadArea);
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            video.SetLabels(dialog.Vehicles, dialog.EmptyParts);
-            video.SetReadArea(dialog.ReadArea);
         }
     }
 
@@ -507,7 +394,7 @@ public sealed partial class MainForm : Form, ICameraHost
         _playableFiles.Clear();
 
         var files = Directory.EnumerateFiles(folder)
-            .Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
+            .Where(VideoInfo.IsVideoFile)
             .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -666,8 +553,8 @@ public sealed partial class MainForm : Form, ICameraHost
     private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings, int plates, LabelSummary labels)
     {
         string text = skips.Count > 0
-            ? $"{skips.Count} skip(s), {FormatTime(TimeSpan.FromSeconds(skips.Sum(r => r.Length)))} cut"
-            : scanned ? "scanned, nothing cut" : "not scanned";
+            ? $"{skips.Count} gap(s), {FormatTime(TimeSpan.FromSeconds(skips.Sum(r => r.Length)))} cut"
+            : scanned ? "scanned, no gaps" : "not scanned";
 
         if (plates > 0)
             text += $", {plates} plate(s)";
@@ -1034,7 +921,7 @@ public sealed partial class MainForm : Form, ICameraHost
         IReadOnlyList<string> files;
         var available = _playableFiles.OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase).ToList();
 
-        using (var dialog = new PlaylistDialog(available, entry.Playlist.Select(v => v.Path), entry.StreamPath, VideoExtensions.OrderBy(e => e)))
+        using (var dialog = new PlaylistDialog(available, entry.Playlist.Select(v => v.Path), entry.StreamPath, VideoInfo.VideoFileTypes))
         {
             if (dialog.ShowDialog(this) != DialogResult.OK)
                 return;
@@ -1071,7 +958,7 @@ public sealed partial class MainForm : Form, ICameraHost
 
         // The first video sets the picture: restart only if that changed what is sent.
         var newOptions = CameraOptions(entry);
-        bool sameStream = VideoSettings.From(oldOptions).SameStream(VideoSettings.From(newOptions))
+        bool sameStream = VideoSettingsOptions.From(oldOptions).SameStream(VideoSettingsOptions.From(newOptions))
                           && entry.Camera.Format == oldFormat;
         if (!sameStream)
         {
@@ -1090,12 +977,12 @@ public sealed partial class MainForm : Form, ICameraHost
         var video = new VideoFile(RequireFfmpeg(), full);
         video.Message += (_, message) => Log(message);
         video.Changed += OnVideoChanged;
-        video.Load(_options);
+        video.Load();
         _videos[full] = video;
         return video;
     }
 
-    /// <summary>A video's skips changed (edited, scanned, new settings): every camera playing it follows.</summary>
+    /// <summary>A video's gaps or plates changed (the scanner saved them), or its settings: every camera playing it follows.</summary>
     private void OnVideoChanged(object? sender, EventArgs e)
     {
         if (sender is not VideoFile video)
@@ -1227,22 +1114,6 @@ public sealed partial class MainForm : Form, ICameraHost
         }
     }
 
-    public void ScanMotion(VideoFile video)
-    {
-
-        if (video.IsScanning)
-            throw new InvalidOperationException($"{video.Name} is being scanned already.");
-
-        if (video.Skips.Count > 0 && MessageBox.Show(this,
-                $"Replace the {video.Skips.Count} skip(s) of {video.Name} with the result of a new motion scan?",
-                "Scan motion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-        {
-            return;
-        }
-
-        video.StartScan(automatic: false);
-    }
-
     public async Task OpenInVlcAsync(CameraEntry entry)
     {
         if (!entry.Camera.IsOnline)
@@ -1321,8 +1192,7 @@ public sealed partial class MainForm : Form, ICameraHost
 
     /// <summary>
     /// The main settings: defaults for videos without their own, and the server. Cameras of
-    /// videos that follow the defaults restart if their stream changes; new motion settings pick
-    /// their skips again from the saved scans.
+    /// videos that follow the defaults restart if their stream changes.
     /// </summary>
     private async Task EditSettingsAsync()
     {
@@ -1341,8 +1211,8 @@ public sealed partial class MainForm : Form, ICameraHost
         if (!OptionsStore.Save(_options))
             Log("WARNING: the settings could not be saved to disk, so they will be lost when the app closes.");
 
-        var before = VideoSettings.From(old);
-        var after = VideoSettings.From(_options);
+        var before = VideoSettingsOptions.From(old);
+        var after = VideoSettingsOptions.From(_options);
         bool publishingChanged = old.PublishTransport != _options.PublishTransport || old.FfmpegLogLevel != _options.FfmpegLogLevel
                                  || !old.SameSubstream(_options);
 
@@ -1363,8 +1233,6 @@ public sealed partial class MainForm : Form, ICameraHost
         {
             if (video.HasOwnSettings)
                 continue;
-
-            ReapplyMotion(video, before, after);
 
             if (!before.SameStream(after))
                 restart.AddRange(StreamCamerasOf(video));
@@ -1397,12 +1265,11 @@ public sealed partial class MainForm : Form, ICameraHost
             result = dialog.Result;
         }
 
-        var after = VideoSettings.From(result);
-        var defaults = VideoSettings.From(_options);
-        bool sameAsDefaults = after.SameStream(defaults) && after.SameMotion(defaults);
+        var after = VideoSettingsOptions.From(result);
+        var defaults = VideoSettingsOptions.From(_options);
+        bool sameAsDefaults = after.SameStream(defaults);
 
         video.SetOwnSettings(sameAsDefaults ? null : after);
-        ReapplyMotion(video, before, after);
 
         if (before.SameStream(after))
             return;
@@ -1412,29 +1279,6 @@ public sealed partial class MainForm : Form, ICameraHost
                 + $"the new picture settings of {video.Name} apply to cameras that play it first.");
 
         await RestartAsync(StreamCamerasOf(video));
-    }
-
-    /// <summary>
-    /// New motion settings: picks the skips again from the saved motion data, at once and
-    /// without rescanning. Skips edited by hand are only replaced if the user agrees.
-    /// </summary>
-    private void ReapplyMotion(VideoFile video, VideoSettings before, VideoSettings after)
-    {
-        if (before.SameMotion(after) || video.Motion is null)
-            return;
-
-        if (video.SkipsMatchScan(before)
-            || MessageBox.Show(this,
-                $"{video.Name} has skips you changed by hand. Pick its skips again from the saved motion data, "
-                + "with the new motion settings? Your changes would be replaced.",
-                "New motion settings", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-        {
-            video.ApplyMotionSettings(after);
-        }
-        else
-        {
-            Log($"{video.Name}: skips kept as you edited them. Scan motion picks them from a fresh scan.");
-        }
     }
 
     private async Task RestartAsync(IEnumerable<CameraEntry> entries)

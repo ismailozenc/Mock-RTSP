@@ -4,7 +4,7 @@ Copied verbatim from Birel Plaka (github.com/ismailozenc/Birel-Plaka), commit a4
   OcrModelConfig.cs  OcrResult.cs  PlateRead.cs  PlateConsensus.cs  ReadGroups.cs
   TravelEstimator.cs  RoadPerspective.cs
 
-and models/ (Birel Plaka's factory choice):
+and Scanner\models\ (Birel Plaka's factory choice):
 
   yolo-v9-t-384-license-plates-end2end.onnx   plate detector
   cct_xs_v2_global.onnx                       OCR (fast-plate-ocr, MIT)
@@ -12,4 +12,4 @@ and models/ (Birel Plaka's factory choice):
 
 Do not edit these copies: to follow a newer Birel Plaka, copy the files again. AppConfigShim.cs
 (not from Birel Plaka) supplies the [Travel] settings TravelEstimator reads. Detector and PlateOCR
-are not copied: they use OpenCV; MockRtsp.PlateReader does the same steps without it.
+are not copied: they use OpenCV; Scanner\PlateReader.cs does the same steps without it.

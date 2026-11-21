@@ -12,6 +12,8 @@ namespace MockRtsp;
 ///   Right-click             delete a skip range, add one, or clear them all; label a playing part
 ///   Double-click the labels strip (under the play strip): label that playing part
 ///   Mouse wheel             scroll; Ctrl + wheel zooms around the mouse
+/// With <see cref="EditSkips"/> off (the RTSP app, which only shows what the scanner found) the
+/// skips cannot be changed here.
 /// While playing, it scrolls by itself to keep the playhead in view, unless the user has
 /// just scrolled.
 /// </summary>
@@ -56,6 +58,9 @@ public sealed class Timeline : Control
 
     /// <summary>Raised when the user asks to label a playing part, with a moment inside it.</summary>
     public event EventHandler<double>? LabelPartRequested;
+
+    /// <summary>False: the skips are only shown (no edges to drag, no Shift + drag, no skip menu).</summary>
+    public bool EditSkips { get; set; } = true;
 
     public Timeline()
     {
@@ -353,7 +358,8 @@ public sealed class Timeline : Control
             DrawBar(g);
             DrawSkipAreas(g);
             DrawMotion(g, BarArea, Clamp(TimeToX(_duration), 0, ViewWidth));
-            DrawSkipEdges(g);
+            if (EditSkips)
+                DrawSkipEdges(g);
             DrawPlates(g);
             DrawPlayStrip(g);
             DrawLabels(g);
@@ -851,7 +857,7 @@ public sealed class Timeline : Control
         if (e.Button != MouseButtons.Left || _duration <= 0 || !Enabled || e.Y >= ClientSize.Height - _scroll.Height)
             return;
 
-        var (range, isStart) = EdgeAt(e.X);
+        var (range, isStart) = EditSkips ? EdgeAt(e.X) : (-1, false);
 
         if (range >= 0)
         {
@@ -859,7 +865,7 @@ public sealed class Timeline : Control
             _edgeRange = range;
             _edgeIsStart = isStart;
         }
-        else if ((ModifierKeys & Keys.Shift) != 0)
+        else if (EditSkips && (ModifierKeys & Keys.Shift) != 0)
         {
             _drag = DragMode.Create;
             _createAnchor = _dragSeconds = XToTime(e.X);
@@ -903,7 +909,7 @@ public sealed class Timeline : Control
             default:
                 bool overBar = e.Y < ClientSize.Height - _scroll.Height;
                 _hoverX = overBar ? e.X : -1;
-                Cursor = overBar && EdgeAt(e.X).Range >= 0 ? Cursors.SizeWE : Cursors.Default;
+                Cursor = overBar && EditSkips && EdgeAt(e.X).Range >= 0 ? Cursors.SizeWE : Cursors.Default;
                 if (!overBar)
                 {
                     HidePreview();
@@ -943,7 +949,7 @@ public sealed class Timeline : Control
     {
         base.OnMouseUp(e);
 
-        if (e.Button == MouseButtons.Right && _drag == DragMode.None && _duration > 0)
+        if (e.Button == MouseButtons.Right && _drag == DragMode.None && _duration > 0 && (EditSkips || LabelPartRequested is not null))
         {
             ShowMenu(e.Location);
             return;
@@ -980,14 +986,19 @@ public sealed class Timeline : Control
         int index = RangeAt(seconds);
         var menu = new ContextMenuStrip();
 
-        if (LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
+        if (LabelPartRequested is not null && LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
         {
             menu.Items.Add($"Label part {group.Part.Number} ({VehicleLabels.Describe(group)})...", null,
                 (_, _) => LabelPartRequested?.Invoke(this, seconds));
-            menu.Items.Add(new ToolStripSeparator());
+            if (EditSkips)
+                menu.Items.Add(new ToolStripSeparator());
         }
 
-        if (index >= 0)
+        if (!EditSkips)
+        {
+            // Only showing: no skip items.
+        }
+        else if (index >= 0)
         {
             var range = _skips[index];
             menu.Items.Add($"Delete skip {FormatPrecise(range.Start)} - {FormatPrecise(range.End)}", null,
@@ -999,8 +1010,11 @@ public sealed class Timeline : Control
                 (_, _) => ReplaceSkips(_skips.Append(new SkipRange(seconds, Math.Min(_duration, seconds + 5))).ToList()));
         }
 
-        var clear = menu.Items.Add("Clear all skips", null, (_, _) => ReplaceSkips(new List<SkipRange>()));
-        clear.Enabled = _skips.Count > 0;
+        if (EditSkips)
+        {
+            var clear = menu.Items.Add("Clear all skips", null, (_, _) => ReplaceSkips(new List<SkipRange>()));
+            clear.Enabled = _skips.Count > 0;
+        }
 
         menu.Closed += (_, _) => BeginInvoke(new Action(menu.Dispose));
         menu.Show(this, location);

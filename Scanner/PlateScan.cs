@@ -264,10 +264,11 @@ internal sealed class PlateScanner : IDisposable
     /// Scans the parts, reading plates only inside the area's detection area and using its road
     /// perspective for the direction, as Birel Plaka does with a camera's. <paramref name="progress"/>
     /// gets the share done (0 to 1) and a line about it. Throws OperationCanceledException when
-    /// cancelled (nothing is returned then).
+    /// cancelled (the parts done so far have been reported to <paramref name="partDone"/>).
+    /// <paramref name="partDone"/> gets each part as soon as it is read, with its cars (on this thread).
     /// </summary>
     public PlateScan Scan(string videoPath, VideoInfo info, IReadOnlyList<PlayingPart> parts, ReadArea area,
-        Action<double, string> progress, CancellationToken cancel)
+        Action<double, string> progress, Action<ScannedPart, IReadOnlyList<PlateCar>> partDone, CancellationToken cancel)
     {
         AppConfig.Travel = _settings.Travel;           // what the copied TravelEstimator reads
 
@@ -298,6 +299,7 @@ internal sealed class PlateScanner : IDisposable
             var travel = new TravelEstimator(TicksPerSecond);
             var groups = new ReadGroups(policy, _ocrConfig.Alphabet, TicksPerSecond);
             int frames = 0;
+            int firstCar = cars.Count;          // this part's cars are the ones added from here
             string where = $"part {part.Number} of {parts.Count}";
 
             foreach (var (rgb, seconds) in Frames(videoPath, part, width, height, fps, cancel))
@@ -328,7 +330,9 @@ internal sealed class PlateScanner : IDisposable
             }
 
             cars.AddRange(groups.CloseAll().Select(ToCar));
-            scanned.Add(new ScannedPart(part.Start, part.End, frames));
+            var scannedPart = new ScannedPart(part.Start, part.End, frames);
+            scanned.Add(scannedPart);
+            partDone(scannedPart, cars.GetRange(firstCar, cars.Count - firstCar).OrderBy(c => c.Time).ToList());
             done += part.Length;
             progress(done / total, $"{where} done: {cars.Count} car(s) so far");
         }

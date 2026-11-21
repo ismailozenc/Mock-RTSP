@@ -7,7 +7,8 @@ namespace MockRtsp;
 /// <summary>
 /// Measures movement through a whole video in the background: FFmpeg decodes it into small
 /// grey pictures, 5 a second, and each is compared with the one before. Small differences
-/// (sensor noise, compression) are ignored, so only real changes count.
+/// (sensor noise, compression) are ignored, so only real changes count. <see cref="SoFar"/> gives
+/// what is measured so far, for showing the graph while it grows.
 /// </summary>
 public sealed class MotionScan : IDisposable
 {
@@ -18,6 +19,7 @@ public sealed class MotionScan : IDisposable
 
     private readonly CancellationTokenSource _cancel = new();
     private readonly double _duration;
+    private readonly List<byte> _levels = new();      // guarded by itself
     private Process? _process;
     private int _samples;
 
@@ -37,6 +39,16 @@ public sealed class MotionScan : IDisposable
     public MotionProfile? Result { get; private set; }
 
     public string? Error { get; private set; }
+
+    /// <summary>The movement measured so far (any thread), or null before the first sample.</summary>
+    public MotionProfile? SoFar
+    {
+        get
+        {
+            lock (_levels)
+                return _levels.Count == 0 ? null : new MotionProfile(1 / SamplesPerSecond, _levels.ToArray());
+        }
+    }
 
     public static MotionScan Start(string ffmpegPath, string file, VideoInfo source)
     {
@@ -69,7 +81,7 @@ public sealed class MotionScan : IDisposable
         }
 
         string lastError = string.Empty;
-        var levels = new List<byte>();
+        var levels = _levels;
 
         try
         {
@@ -92,7 +104,9 @@ public sealed class MotionScan : IDisposable
             while (!_cancel.IsCancellationRequested
                    && output.ReadAtLeast(current, current.Length, throwOnEndOfStream: false) == current.Length)
             {
-                levels.Add(first ? (byte)0 : Level(previous, current));
+                byte level = first ? (byte)0 : Level(previous, current);
+                lock (levels)
+                    levels.Add(level);
                 first = false;
                 (previous, current) = (current, previous);
                 _samples++;
@@ -103,10 +117,13 @@ public sealed class MotionScan : IDisposable
             if (_cancel.IsCancellationRequested)
                 return;
 
-            if (levels.Count == 0)
-                Error = lastError.Length > 0 ? lastError : "FFmpeg could not read the video.";
-            else
-                Result = new MotionProfile(1 / SamplesPerSecond, levels.ToArray());
+            lock (levels)
+            {
+                if (levels.Count == 0)
+                    Error = lastError.Length > 0 ? lastError : "FFmpeg could not read the video.";
+                else
+                    Result = new MotionProfile(1 / SamplesPerSecond, levels.ToArray());
+            }
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or Win32Exception or ObjectDisposedException)
         {

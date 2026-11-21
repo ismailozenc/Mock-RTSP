@@ -15,9 +15,6 @@ public sealed partial class CameraPanel
     private Button _openVlc = null!;
     private Button _playlist = null!;
     private Button _settings = null!;
-    private Button _scanMotion = null!;
-    private Button _plates = null!;
-    private Button _labels = null!;
     private Label _stats = null!;
     private Label _lblOutage = null!;
     private NumericUpDown _outageSeconds = null!;
@@ -33,8 +30,6 @@ public sealed partial class CameraPanel
     private Label _time = null!;
     private Label _lblSpeed = null!;
     private ComboBox _speed = null!;
-    private Button _skipStart = null!;
-    private Button _skipEnd = null!;
     private Button _zoomOut = null!;
     private Button _zoomIn = null!;
     private Button _zoomFit = null!;
@@ -61,9 +56,6 @@ public sealed partial class CameraPanel
         _openVlc = new Button();
         _playlist = new Button();
         _settings = new Button();
-        _scanMotion = new Button();
-        _plates = new Button();
-        _labels = new Button();
         _stats = new Label();
         _lblOutage = new Label();
         _outageSeconds = new NumericUpDown();
@@ -79,8 +71,6 @@ public sealed partial class CameraPanel
         _time = new Label();
         _lblSpeed = new Label();
         _speed = new ComboBox();
-        _skipStart = new Button();
-        _skipEnd = new Button();
         _zoomOut = new Button();
         _zoomIn = new Button();
         _zoomFit = new Button();
@@ -118,12 +108,6 @@ public sealed partial class CameraPanel
         _playlist.Text = "Playlist...";
         _settings.Size = new Size(110, 28);
         _settings.Text = "Video settings...";
-        _scanMotion.Size = new Size(110, 28);
-        _scanMotion.Text = "Scan motion";
-        _plates.Size = new Size(70, 28);
-        _plates.Text = "Plates...";
-        _labels.Size = new Size(70, 28);
-        _labels.Text = "Labels...";
 
         _stats.AutoSize = true;
         _stats.Font = new Font("Consolas", 8.5F);
@@ -151,7 +135,7 @@ public sealed partial class CameraPanel
         _header.Dock = DockStyle.Fill;
         _header.Margin = new Padding(0);
         _header.WrapContents = true;
-        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _plates, _labels, _lblOutage, _outageSeconds, _outage, _remove });
+        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _lblOutage, _outageSeconds, _outage, _remove });
 
         // ================= Player: video, rewind, pause, back, forward, next, speed, skips, zoom =================
         _video.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -181,11 +165,6 @@ public sealed partial class CameraPanel
         _speed.Margin = new Padding(0, 4, 3, 0);
         _speed.Width = 64;
 
-        _skipStart.Margin = new Padding(14, 3, 3, 3);
-        _skipStart.Size = new Size(74, 28);
-        _skipStart.Text = "Skip start";
-        _skipEnd.Size = new Size(74, 28);
-        _skipEnd.Text = "Skip end";
 
         _zoomOut.Margin = new Padding(14, 3, 3, 3);
         _zoomOut.Size = new Size(30, 28);
@@ -200,10 +179,11 @@ public sealed partial class CameraPanel
         _player.Dock = DockStyle.Fill;
         _player.Margin = new Padding(0, 2, 0, 0);
         _player.WrapContents = true;
-        _player.Controls.AddRange(new Control[] { _video, _rewind, _back10, _playPause, _forward10, _next, _time, _lblSpeed, _speed, _skipStart, _skipEnd, _zoomOut, _zoomIn, _zoomFit, _stats });
+        _player.Controls.AddRange(new Control[] { _video, _rewind, _back10, _playPause, _forward10, _next, _time, _lblSpeed, _speed, _zoomOut, _zoomIn, _zoomFit, _stats });
 
         // ================= Timeline: hover to preview, click to jump, red = skipped =================
         _timeline.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _timeline.EditSkips = false;
         _timeline.Height = 108;
         _timeline.Margin = new Padding(0, 4, 0, 0);
 
@@ -227,23 +207,16 @@ public sealed partial class CameraPanel
         _rewind.Click += new EventHandler(OnRewindClick);
         _next.Click += new EventHandler(OnNextClick);
         _settings.Click += new EventHandler(OnSettingsClick);
-        _scanMotion.Click += new EventHandler(OnScanMotionClick);
-        _plates.Click += new EventHandler(OnPlatesClick);
-        _labels.Click += new EventHandler(OnLabelsClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _remove.Click += new EventHandler(OnRemoveClick);
         _back10.Click += new EventHandler(OnBack10Click);
         _playPause.Click += new EventHandler(OnPlayPauseClick);
         _forward10.Click += new EventHandler(OnForward10Click);
         _speed.SelectedIndexChanged += new EventHandler(OnSpeedChanged);
-        _skipStart.Click += new EventHandler(OnSkipStartClick);
-        _skipEnd.Click += new EventHandler(OnSkipEndClick);
         _zoomOut.Click += new EventHandler(OnZoomOutClick);
         _zoomIn.Click += new EventHandler(OnZoomInClick);
         _zoomFit.Click += new EventHandler(OnZoomFitClick);
         _timeline.SeekRequested += new EventHandler<double>(OnTimelineSeek);
-        _timeline.SkipRangesChanged += new EventHandler(OnTimelineSkipsChanged);
-        _timeline.LabelPartRequested += new EventHandler<double>(OnTimelineLabelPart);
 
         // ================= Panel =================
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)

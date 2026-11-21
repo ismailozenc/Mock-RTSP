@@ -41,11 +41,6 @@ public sealed class StreamOptions
     // ---- Ground truth: where the log of streamed plates goes ----
     public string GroundTruthFolder { get; set; } = string.Empty;   // empty = Documents\MockRtsp\ground-truth
 
-    // ---- Motion scan: still parts of a video become skip ranges ----
-    public bool AutoScanMotion { get; set; } = true;          // scan videos that have no skip file yet
-    public double MotionThresholdPercent { get; set; } = 0.3; // share of the picture that must change
-    public double MinStillSeconds { get; set; } = 3;          // shorter still parts keep playing
-    public double MotionPaddingSeconds { get; set; } = 1;     // kept before and after movement
     public string FfmpegLogLevel { get; set; } = "warning";   // error, warning, info
 
     // ---- MediaMTX server (applies at next server start) ----
@@ -99,12 +94,6 @@ public sealed class StreamOptions
 
         if (SubstreamFrameRate < 0 || SubstreamFrameRate > 120 || SubstreamBitrateKbps < 0)
             problems.Add("Substream frame rate must be 0 to 120, and its bitrate cannot be negative.");
-
-        if (MotionThresholdPercent < 0.1 || MotionThresholdPercent > 25)
-            problems.Add("Movement needed must be between 0.1 and 25 % of the picture.");
-
-        if (MinStillSeconds < 1 || MotionPaddingSeconds < 0)
-            problems.Add("Still parts must be at least 1 second, and the time kept around movement cannot be negative.");
 
         if (PublishTransport is not ("tcp" or "udp"))
             problems.Add("Publish transport must be tcp or udp.");

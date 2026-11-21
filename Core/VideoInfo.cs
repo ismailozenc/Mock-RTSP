@@ -8,6 +8,18 @@ namespace MockRtsp;
 /// <summary>Size, frame rate and length of a video file.</summary>
 public sealed record VideoInfo(int Width, int Height, double FrameRate, double DurationSeconds)
 {
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".ts", ".mts", ".m2ts", ".flv", ".wmv", ".webm",
+        ".h264", ".264", ".h265", ".265", ".hevc"
+    };
+
+    /// <summary>The video file types both apps list, sorted.</summary>
+    public static IEnumerable<string> VideoFileTypes => VideoExtensions.OrderBy(e => e);
+
+    /// <summary>True for a file whose extension is one of the video types both apps list.</summary>
+    public static bool IsVideoFile(string path) => VideoExtensions.Contains(Path.GetExtension(path));
+
     /// <summary>
     /// Reads the video's details with "ffmpeg -i", so ffprobe.exe is not needed.
     /// Throws InvalidOperationException if the file has no readable video stream.
