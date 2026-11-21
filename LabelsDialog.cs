@@ -10,7 +10,9 @@ namespace MockRtsp;
 /// through the rest, and "Move the camera here" jumps the camera's stream to the part.
 /// "Read plates in every part" reads the plates of all playing parts with Birel Plaka's models and
 /// logic (<see cref="PlateScanner"/>); each part then lists the cars found, with a picture of the
-/// plate, every reading and the direction, to add as vehicles after checking them. Plates are read
+/// plate, every reading and the direction, to add as vehicles after checking them. After a reading,
+/// every part without labels is prefilled with its cars (most likely plate and direction) and marked
+/// "to check" until it has been looked at. Plates are read
 /// where Birel Plaka would read them on a camera: inside the detection area, with the road
 /// perspective for the direction, both drawn on the player or taken from Birel Plaka's settings.
 /// The layout lives in LabelsDialog.Designer.cs.
@@ -34,6 +36,8 @@ public sealed partial class LabelsDialog : Form
     private readonly HashSet<PlateCar> _used = new(ReferenceEqualityComparer.Instance);   // added as vehicles in this dialog
     private CancellationTokenSource? _scanCancel;
     private bool _selectingCar;          // set while the code (not the user) selects a car
+    private readonly HashSet<int> _toCheck = new();  // parts prefilled from the plates and not looked at yet
+    private string _toCheckSaved = "";               // as in the plates file, to save it only when it changed
     private static string? _birelSettingsFile;       // the camera-settings.ini chosen last (this run)
 
     /// <summary>Parameterless constructor for the designer.</summary>
@@ -81,6 +85,19 @@ public sealed partial class LabelsDialog : Form
             ? "No camera is playing this video now."
             : "Jumps the camera's stream to the start of this part.";
 
+        if (plateScan?.ToCheck is { } toCheck)
+        {
+            var groups = Groups();
+            foreach (double moment in toCheck)
+            {
+                int i = _parts.FindIndex(p => p.Contains(moment, _duration));
+                if (i >= 0 && groups[i].Vehicles.Count > 0)
+                    _toCheck.Add(i);
+            }
+        }
+
+        _toCheckSaved = ToCheckText(plateScan?.ToCheck);
+        _prefill.Enabled = plateScan is not null;
         FillParts();
         ShowArea();
 
@@ -258,15 +275,16 @@ public sealed partial class LabelsDialog : Form
         {
             var item = _partList.Items[i];
             int read = _scan?.CarsIn(_parts[i], _duration).Count ?? 0;
-            item.SubItems[4].Text = VehicleLabels.Describe(groups[i]) + (_scan is null ? "" : $"   [{read} read]");
-            item.ForeColor = groups[i].IsLabelled ? SystemColors.WindowText : Color.DarkOrange;
+            bool check = _toCheck.Contains(i);
+            item.SubItems[4].Text = (check ? "to check: " : "") + VehicleLabels.Describe(groups[i]) + (_scan is null ? "" : $"   [{read} read]");
+            item.ForeColor = !groups[i].IsLabelled ? Color.DarkOrange : check ? Color.RoyalBlue : SystemColors.WindowText;
         }
 
         var summary = VehicleLabels.Summarize(_parts, _vehicles, _empty, _duration);
-        _summary.Text = summary.Describe() + ".";
-        _summary.ForeColor = summary.ToLabel > 0 ? Color.DarkOrange : Color.ForestGreen;
+        _summary.Text = summary.Describe() + (_toCheck.Count > 0 ? $"; {_toCheck.Count} prefilled from the plates, to check" : "") + ".";
+        _summary.ForeColor = summary.ToLabel > 0 || _toCheck.Count > 0 ? Color.DarkOrange : Color.ForestGreen;
         _deleteOutside.Enabled = summary.Outside > 0;
-        _previousUnlabelled.Enabled = _nextUnlabelled.Enabled = summary.ToLabel > 0;
+        _previousUnlabelled.Enabled = _nextUnlabelled.Enabled = summary.ToLabel > 0 || _toCheck.Count > 0;
     }
 
     private void ShowNoParts()
@@ -292,8 +310,13 @@ public sealed partial class LabelsDialog : Form
         if (index < 0 || index >= _parts.Count)
             return false;
 
-        if (_current >= 0 && _current != index && !CommitCurrent())
-            return false;
+        if (_current >= 0 && _current != index)
+        {
+            if (!CommitCurrent())
+                return false;
+            if (_toCheck.Remove(_current))      // looked at: prefilled labels now count as checked
+                RefreshParts();
+        }
 
         _current = index;
         var part = _parts[index];
@@ -310,7 +333,8 @@ public sealed partial class LabelsDialog : Form
             _noVehicles.Checked = group.Vehicles.Count == 0 && group.MarkedEmpty;
             _noVehicles.Enabled = group.Vehicles.Count == 0;
             _partTitle.Text = $"Part {part.Number} of {_parts.Count}: {PlateMarks.FormatTime(part.Start)} to "
-                              + $"{PlateMarks.FormatTime(part.End)} ({part.Length:0.0} s)";
+                              + $"{PlateMarks.FormatTime(part.End)} ({part.Length:0.0} s)"
+                              + (_toCheck.Contains(index) ? "  -  prefilled from the plates read: check it" : "");
             SelectInList(index);
         }
         finally
@@ -477,6 +501,11 @@ public sealed partial class LabelsDialog : Form
             _plateImages.Images.Clear();
             _partCars = _scan is not null && _current >= 0 ? _scan.CarsIn(_parts[_current], _duration) : new List<PlateCar>();
 
+            // A car already in the part's vehicles (at its time, as prefilled or added before) counts as added.
+            var times = _table.Rows.Cast<DataGridViewRow>().Select(r => r.Cells[0].Value?.ToString()).ToHashSet();
+            foreach (var car in _partCars.Where(c => times.Contains(PlateMarks.FormatTime(c.Time))))
+                _used.Add(car);
+
             if (_scan is null)
             {
                 _carsTitle.Text = _createScanner is null
@@ -495,7 +524,7 @@ public sealed partial class LabelsDialog : Form
                 var car = _partCars[i];
                 _plateImages.Images.Add(Thumbnail(car.PlateJpeg));
                 var item = new ListViewItem(car.Decided ? car.Plate : car.Plate + " ?", i);
-                item.SubItems.Add(car.Movement);
+                item.SubItems.Add(car.DirectionText);
                 item.SubItems.Add(PlateMarks.FormatTime(car.Time));
                 item.SubItems.Add(car.Reads.ToString());
                 item.SubItems.Add(Result(car));
@@ -527,7 +556,7 @@ public sealed partial class LabelsDialog : Form
     private void OnCarsResize(object? sender, EventArgs e)
     {
         int others = _colCarPlate.Width + _colCarDirection.Width + _colCarTime.Width + _colCarReads.Width;
-        _colCarResult.Width = Math.Max(150, _cars.ClientSize.Width - others - 4);
+        _colCarResult.Width = Math.Max(120, _cars.ClientSize.Width - others - 4);
     }
 
     private string Result(PlateCar car) =>
@@ -624,7 +653,7 @@ public sealed partial class LabelsDialog : Form
 
         _table.EndEdit();
         row.Cells[2].Value = SelectedReading(car);
-        if (string.IsNullOrEmpty(row.Cells[1].Value as string) && car.Direction is { } direction)
+        if (string.IsNullOrEmpty(row.Cells[1].Value as string) && car.MostLikelyDirection is { } direction)
             row.Cells[1].Value = direction == VehicleDirection.Coming ? "coming" : "going";
         MarkUsed(car);
     }
@@ -638,11 +667,11 @@ public sealed partial class LabelsDialog : Form
         AfterAdding(last);
     }
 
-    /// <summary>A new row for a car: its best read's time, its direction when known (else left to choose), and the plate.</summary>
+    /// <summary>A new row for a car: its best read's time, its most likely direction (else left to choose), and the plate.</summary>
     private int AddCar(PlateCar car, string plate)
     {
         _table.EndEdit();
-        string? direction = car.Direction switch
+        string? direction = car.MostLikelyDirection switch
         {
             VehicleDirection.Coming => "coming",
             VehicleDirection.Going => "going",
@@ -665,7 +694,7 @@ public sealed partial class LabelsDialog : Form
         if (missing is not null)
         {
             _table.CurrentCell = missing.Cells[1];
-            _scanStatus.Text = "The scan could not tell the direction of a vehicle: choose coming or going in the table.";
+            _scanStatus.Text = "Nothing tells the direction of a vehicle: choose coming or going in the table.";
         }
         else
         {
@@ -759,10 +788,14 @@ public sealed partial class LabelsDialog : Form
                 saved = $" They could not be saved next to the video ({ex.Message}).";
             }
 
-            _scanStatus.Text = $"Read {scan.Cars.Count} car(s) in {parts.Count} part(s) in {watch.Elapsed.TotalSeconds:0} s.{saved}";
+            _toCheckSaved = "";
+            _prefill.Enabled = true;
+            string read = $"Read {scan.Cars.Count} car(s) in {parts.Count} part(s) in {watch.Elapsed.TotalSeconds:0} s.{saved}";
             RefreshParts();
             ShowCars();
             ShowArea();
+            _scanStatus.Text = read + " " + Prefill();
+            SaveToCheck();                  // with the new reading: still marked after Cancel too (parts left unlabelled are ignored then)
         }
         catch (OperationCanceledException)
         {
@@ -789,6 +822,86 @@ public sealed partial class LabelsDialog : Form
         }
     }
 
+    // ===================================================================== prefilling from the plates read
+
+    private void OnPrefillClick(object? sender, EventArgs e) => _scanStatus.Text = Prefill();
+
+    /// <summary>
+    /// Fills every part that has no labels yet (no vehicles, not marked empty) with the cars read in it:
+    /// each with its time, its most likely direction and its plate (voted, or the best guess). Cars
+    /// seen in fewer than [Travel] MinReads pictures are left out as glimpses; a part with a car whose
+    /// direction nothing tells is left to label. Prefilled parts are marked to check. Labels already
+    /// made are never changed. Returns what was done, for the status line.
+    /// </summary>
+    private string Prefill()
+    {
+        if (_scan is null || !CommitCurrent())
+            return "";
+
+        int minReads = PlateScanSettings.BirelPlakaFactory.Travel.MinReads;
+        var groups = Groups();
+        int parts = 0, vehicles = 0, unknown = 0;
+        for (int i = 0; i < _parts.Count; i++)
+        {
+            if (groups[i].IsLabelled)
+                continue;
+
+            var cars = _scan.CarsIn(_parts[i], _duration).Where(c => c.Reads >= minReads).ToList();
+            if (cars.Count == 0)
+                continue;
+            if (cars.Any(c => c.MostLikelyDirection is null))
+            {
+                unknown++;
+                continue;
+            }
+
+            foreach (var car in cars)
+            {
+                _vehicles.Add(new VehicleMark(Math.Round(car.Time, 3), car.MostLikelyDirection!.Value, car.Plate));
+                _used.Add(car);
+            }
+
+            _toCheck.Add(i);
+            parts++;
+            vehicles += cars.Count;
+        }
+
+        if (_current >= 0)
+            Select(_current);       // shows the prefilled vehicles of the part on screen
+        RefreshParts();
+
+        string done = parts == 0
+            ? "No part without labels could be prefilled."
+            : $"Prefilled {parts} part(s) with {vehicles} vehicle(s) (most likely plate and direction): check them with Next to label.";
+        return unknown == 0 ? done : done + $" {unknown} part(s) left to label: nothing tells a car's direction there.";
+    }
+
+    private static string ToCheckText(IEnumerable<double>? moments) =>
+        moments is null ? "" : string.Join(";", moments.Select(t => Math.Round(t, 3).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    /// <summary>Keeps the parts still to check in the plates file, so they are still marked next time.</summary>
+    private void SaveToCheck()
+    {
+        if (_scan is null)
+            return;
+
+        var moments = _toCheck.OrderBy(i => i).Select(i => Math.Round(_parts[i].Middle, 3)).ToList();
+        if (ToCheckText(moments) == _toCheckSaved)
+            return;
+
+        _scan = _scan with { ToCheck = moments.Count == 0 ? null : moments };
+        try
+        {
+            PlateScanFile.Save(_videoPath, _scan);
+            _toCheckSaved = ToCheckText(moments);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"The labels are kept, but which parts are still to check could not be saved next to the video:\n\n{ex.Message}",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     // ===================================================================== moving between parts
 
     private void OnNextUnlabelledClick(object? sender, EventArgs e) => GoToUnlabelled(+1);
@@ -804,14 +917,15 @@ public sealed partial class LabelsDialog : Form
         for (int n = 1; n <= groups.Count; n++)
         {
             int i = ((_current + step * n) % groups.Count + groups.Count) % groups.Count;
-            if (!groups[i].IsLabelled)
+            if (!groups[i].IsLabelled || (_toCheck.Contains(i) && i != _current))
             {
                 Select(i);
                 return;
             }
         }
 
-        MessageBox.Show(this, "Every playing part is labelled.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageBox.Show(this, _toCheck.Count > 0 ? "Every other playing part is labelled and checked." : "Every playing part is labelled.",
+            Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // ===================================================================== tidying and export
@@ -864,6 +978,8 @@ public sealed partial class LabelsDialog : Form
 
         Vehicles = VehicleLabels.Normalize(_vehicles, _duration);
         EmptyParts = VehicleLabels.NormalizeEmpty(_empty, _duration);
+        _toCheck.Remove(_current);       // the part on screen has been seen
+        SaveToCheck();
         DialogResult = DialogResult.OK;
     }
 }

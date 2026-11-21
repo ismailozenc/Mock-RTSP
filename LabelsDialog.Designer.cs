@@ -5,7 +5,7 @@ namespace MockRtsp;
 // Layout: one grid docked Fill, two columns. Row 0 the summary (both columns). Row 1 (the only
 // row that grows): on the left the player showing the selected part, the plate reading area's
 // buttons and the list of playing parts under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
-// moving between parts, reading plates and exporting, row 3 OK and Cancel. Under the vehicles: the
+// moving between parts, reading plates, prefilling from them and exporting, row 3 OK and Cancel. Under the vehicles: the
 // cars of the part found by the plate scan, the readings of the selected car, and their buttons.
 public sealed partial class LabelsDialog
 {
@@ -58,6 +58,7 @@ public sealed partial class LabelsDialog
     private Button _useForSelected = null!;
     private Button _useAll = null!;
     private Button _readPlates = null!;
+    private Button _prefill = null!;
     private ProgressBar _scanProgress = null!;
     private Label _scanStatus = null!;
     private FlowLayoutPanel _tools = null!;
@@ -129,6 +130,7 @@ public sealed partial class LabelsDialog
         _useForSelected = new Button();
         _useAll = new Button();
         _readPlates = new Button();
+        _prefill = new Button();
         _scanProgress = new ProgressBar();
         _scanStatus = new Label();
         _tools = new FlowLayoutPanel();
@@ -300,7 +302,7 @@ public sealed partial class LabelsDialog
         _colCarPlate.Text = "Plate";
         _colCarPlate.Width = 196;
         _colCarDirection.Text = "Direction";
-        _colCarDirection.Width = 66;
+        _colCarDirection.Width = 110;
         _colCarTime.Text = "Time";
         _colCarTime.Width = 58;
         _colCarReads.Text = "Reads";
@@ -384,12 +386,16 @@ public sealed partial class LabelsDialog
         _readPlates.AutoSize = true;
         _readPlates.Margin = new Padding(18, 3, 3, 3);
         _readPlates.Text = "Read plates in every part";
+        _prefill.AutoSize = true;
+        _prefill.Enabled = false;
+        _prefill.Text = "Prefill unlabelled parts";
         _scanProgress.Margin = new Padding(6, 6, 3, 3);
         _scanProgress.Size = new Size(140, 18);
         _scanProgress.Visible = false;
         _scanStatus.AutoSize = true;
         _scanStatus.ForeColor = SystemColors.GrayText;
-        _scanStatus.Margin = new Padding(6, 8, 3, 3);
+        _scanStatus.Margin = new Padding(6, 3, 3, 3);
+        _scanStatus.MaximumSize = new Size(360, 0);
         _scanStatus.Text = "";
 
         _tools.AutoSize = true;
@@ -401,6 +407,7 @@ public sealed partial class LabelsDialog
         _tools.Controls.Add(_deleteOutside);
         _tools.Controls.Add(_export);
         _tools.Controls.Add(_readPlates);
+        _tools.Controls.Add(_prefill);
         _tools.Controls.Add(_scanProgress);
         _tools.Controls.Add(_scanStatus);
 
@@ -464,6 +471,7 @@ public sealed partial class LabelsDialog
         _useForSelected.Click += new EventHandler(OnUseForSelectedClick);
         _useAll.Click += new EventHandler(OnUseAllClick);
         _readPlates.Click += new EventHandler(OnReadPlatesClick);
+        _prefill.Click += new EventHandler(OnPrefillClick);
         _player.AreaChanged += new EventHandler(OnAreaChanged);
         _player.EditingChanged += new EventHandler(OnAreaEditingChanged);
         _editDetection.Click += new EventHandler(OnEditDetectionClick);

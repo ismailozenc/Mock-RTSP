@@ -49,7 +49,8 @@ internal sealed record PlateReading(string Text, int Count, double BestOcr, doub
 /// <summary>
 /// One car found by a plate scan: its plate (voted by Birel Plaka's consensus when the reads clearly
 /// agree, otherwise the best guess and why), every distinct reading, the direction from its plate's
-/// movement, and JPEG crops of the plate and the car around it.
+/// movement (Birel Plaka's estimate, and the most likely one when that cannot tell), and JPEG crops of
+/// the plate and the car around it.
 /// </summary>
 internal sealed record PlateCar(
     double Start,
@@ -58,7 +59,8 @@ internal sealed record PlateCar(
     bool Decided,
     string Plate,
     string? Reason,
-    string Movement,            // coming, going, stopped, unclear or unknown
+    string Movement,            // coming, going, stopped, unclear or unknown (Birel Plaka's estimate)
+    string? LikelyMovement,     // when Movement is neither coming nor going: the more likely of the two, or null (see DirectionGuess)
     int Reads,
     int Votes,
     double? Agreement,          // lowest share of the vote of any character (1 = all reads agree)
@@ -66,14 +68,97 @@ internal sealed record PlateCar(
     byte[]? PlateJpeg,
     byte[]? CarJpeg)
 {
-    /// <summary>The direction for a label, when the movement says coming or going.</summary>
+    /// <summary>The direction for a label, when Birel Plaka's estimate says coming or going.</summary>
     [JsonIgnore]
-    public VehicleDirection? Direction => Movement switch
+    public VehicleDirection? Direction => ParseMovement(Movement);
+
+    /// <summary>The most likely direction: Birel Plaka's estimate, else the guess from the same measurements; null when nothing tells.</summary>
+    [JsonIgnore]
+    public VehicleDirection? MostLikelyDirection => Direction ?? ParseMovement(LikelyMovement);
+
+    /// <summary>For the cars list: "coming", or "going? (unclear)" for a guess.</summary>
+    [JsonIgnore]
+    public string DirectionText => Direction is not null || LikelyMovement is null ? Movement : $"{LikelyMovement}? ({Movement})";
+
+    private static VehicleDirection? ParseMovement(string? movement) => movement switch
     {
         "coming" => VehicleDirection.Coming,
         "going" => VehicleDirection.Going,
         _ => null
     };
+}
+
+/// <summary>
+/// The most likely direction of a car when Birel Plaka's travel estimate says neither coming nor going.
+/// Birel Plaka only says so when the plate's size (or its position on the drawn road) changes by at
+/// least [Travel] SizeThreshold (RoadThreshold); a smaller change still points one way (the clearer of
+/// the two, each against its threshold). When size and road clearly disagree ("unclear") the plate's
+/// size is taken: Birel Plaka then asks to check the drawn road perspective, so the size is the surer
+/// of the two. Coming: the plate grows (moves to the near edge of the road); going: it shrinks.
+/// </summary>
+internal static class DirectionGuess
+{
+    /// <summary>Below this change of plate size (log ratio, about 3 %) nothing is guessed: box noise.</summary>
+    public const double MinSizeChange = 0.03;
+
+    /// <summary>Below this change of road depth (0 far .. 1 near) nothing is guessed.</summary>
+    public const double MinRoadChange = 0.02;
+
+    /// <param name="estimate">Birel Plaka's estimate for the car's track, or null.</param>
+    /// <param name="reads">The car's reads: time and plate box.</param>
+    /// <returns>"coming", "going", or null when nothing tells.</returns>
+    public static string? Likely(TravelEstimate? estimate, IReadOnlyList<(long Time, RectangleF Box)> reads, TravelOptions travel)
+    {
+        switch (estimate?.Direction)
+        {
+            case TravelDirection.Approaching:
+                return "coming";
+            case TravelDirection.Leaving:
+                return "going";
+            case TravelDirection.Unclear when estimate.SizeChange != 0:
+                return estimate.SizeChange > 0 ? "coming" : "going";
+        }
+
+        // Birel Plaka's own measurements, when it made them (enough reads): size and road, each against its threshold.
+        double size = 0, road = 0;
+        if (estimate is { } e && e.Reads >= travel.MinReads && e.Seconds >= travel.MinDuration.TotalSeconds && e.SizeChange > -1)
+        {
+            size = Math.Log(1 + e.SizeChange);
+            if (e.RoadStart is double a && e.RoadEnd is double b)
+                road = b - a;
+        }
+        else
+        {
+            // Too few reads for an estimate: the plate's size from the first to the last reads.
+            var ordered = reads.OrderBy(r => r.Time).ToList();
+            if (ordered.Count < 2)
+                return null;
+            int k = Math.Min(3, ordered.Count / 2);
+            double Size(RectangleF box) => Math.Sqrt(Math.Max(1, box.Width * box.Height));
+            double first = Median(ordered.Take(k).Select(r => Size(r.Box)));
+            double last = Median(ordered.Skip(ordered.Count - k).Select(r => Size(r.Box)));
+            size = Math.Log(last / first);
+        }
+
+        bool sizeTells = Math.Abs(size) >= MinSizeChange;
+        bool roadTells = Math.Abs(road) >= MinRoadChange;
+        double sign = (sizeTells, roadTells) switch
+        {
+            (true, true) => Math.Abs(size) / travel.SizeThreshold >= Math.Abs(road) / travel.RoadThreshold ? size : road,
+            (true, false) => size,
+            (false, true) => road,
+            _ => 0
+        };
+
+        return sign > 0 ? "coming" : sign < 0 ? "going" : null;
+    }
+
+    private static double Median(IEnumerable<double> values)
+    {
+        var sorted = values.OrderBy(v => v).ToArray();
+        int m = sorted.Length / 2;
+        return sorted.Length % 2 == 1 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+    }
 }
 
 internal sealed record ScannedPart(double Start, double End, int Frames);
@@ -87,7 +172,8 @@ internal sealed record PlateScan(
     string? DetectionArea,          // the ReadArea used (Birel Plaka's text format); null: whole picture / none
     string? RoadPerspective,
     IReadOnlyList<ScannedPart> Parts,
-    IReadOnlyList<PlateCar> Cars)
+    IReadOnlyList<PlateCar> Cars,
+    IReadOnlyList<double>? ToCheck = null)    // moments in parts prefilled from this reading and not looked at yet
 {
     /// <summary>The cars of one playing part (those whose best read is inside it).</summary>
     public List<PlateCar> CarsIn(PlayingPart part, double durationSeconds) =>
@@ -347,7 +433,8 @@ internal sealed class PlateScanner : IDisposable
                 .ToList();
 
             var best = view.BestRead ?? reads.OrderByDescending(r => r.WeakestConfidence).First();
-            string movement = (view.TrackKey as TravelTrack)?.Estimate.Direction switch
+            var estimate = (view.TrackKey as TravelTrack)?.Estimate;
+            string movement = estimate?.Direction switch
             {
                 TravelDirection.Approaching => "coming",
                 TravelDirection.Leaving => "going",
@@ -371,6 +458,7 @@ internal sealed class PlateScanner : IDisposable
                 view.Text.Length > 0 ? view.Text : readings.FirstOrDefault()?.Text ?? string.Empty,
                 view.State == GroupState.Decided ? null : Reason(view),
                 movement,
+                movement is "coming" or "going" ? null : DirectionGuess.Likely(estimate, reads.Select(r => (r.Time, r.Box)).ToList(), _settings.Travel),
                 view.Reads.Count,
                 view.Votes,
                 view.Consensus is { } c ? Math.Round(c.LowestShare, 3) : null,
