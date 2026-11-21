@@ -3,8 +3,8 @@
 namespace MockRtsp;
 
 // Layout: one grid docked Fill, two columns. Row 0 the summary (both columns). Row 1 (the only
-// row that grows): on the left the player showing the selected part with the list of playing parts
-// under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
+// row that grows): on the left the player showing the selected part, the plate reading area's
+// buttons and the list of playing parts under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
 // moving between parts, reading plates and exporting, row 3 OK and Cancel. Under the vehicles: the
 // cars of the part found by the plate scan, the readings of the selected car, and their buttons.
 public sealed partial class LabelsDialog
@@ -15,6 +15,13 @@ public sealed partial class LabelsDialog
     private Label _summary = null!;
     private TableLayoutPanel _left = null!;
     private PartPlayer _player = null!;
+    private FlowLayoutPanel _areaTools = null!;
+    private CheckBox _editDetection = null!;
+    private CheckBox _editPerspective = null!;
+    private Button _wholePicture = null!;
+    private Button _removePerspective = null!;
+    private Button _fromBirel = null!;
+    private Label _areaNote = null!;
     private ListView _partList = null!;
     private ColumnHeader _colNumber = null!;
     private ColumnHeader _colFrom = null!;
@@ -79,6 +86,13 @@ public sealed partial class LabelsDialog
         _summary = new Label();
         _left = new TableLayoutPanel();
         _player = new PartPlayer();
+        _areaTools = new FlowLayoutPanel();
+        _editDetection = new CheckBox();
+        _editPerspective = new CheckBox();
+        _wholePicture = new Button();
+        _removePerspective = new Button();
+        _fromBirel = new Button();
+        _areaNote = new Label();
         _partList = new ListView();
         _colNumber = new ColumnHeader();
         _colFrom = new ColumnHeader();
@@ -129,6 +143,7 @@ public sealed partial class LabelsDialog
         ((System.ComponentModel.ISupportInitialize)_table).BeginInit();
         _grid.SuspendLayout();
         _left.SuspendLayout();
+        _areaTools.SuspendLayout();
         _editor.SuspendLayout();
         _partTools.SuspendLayout();
         _playRow.SuspendLayout();
@@ -172,11 +187,49 @@ public sealed partial class LabelsDialog
         _left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _left.Dock = DockStyle.Fill;
         _left.Margin = new Padding(0, 0, 10, 0);
-        _left.RowCount = 2;
+        // ================= Where plates are read (Birel Plaka's detection area and road perspective) =================
+        _editDetection.Appearance = Appearance.Button;
+        _editDetection.AutoCheck = false;
+        _editDetection.AutoSize = true;
+        _editDetection.Margin = new Padding(0, 3, 3, 3);
+        _editDetection.Text = "Detection area (R)";
+        _editDetection.UseVisualStyleBackColor = true;
+        _editPerspective.Appearance = Appearance.Button;
+        _editPerspective.AutoCheck = false;
+        _editPerspective.AutoSize = true;
+        _editPerspective.Text = "Road perspective (P)";
+        _editPerspective.UseVisualStyleBackColor = true;
+        _wholePicture.AutoSize = true;
+        _wholePicture.Text = "Whole picture";
+        _removePerspective.AutoSize = true;
+        _removePerspective.Text = "No perspective";
+        _fromBirel.AutoSize = true;
+        _fromBirel.Text = "From Birel Plaka...";
+        _areaNote.AutoSize = true;
+        _areaNote.ForeColor = SystemColors.GrayText;
+        _areaNote.Margin = new Padding(0, 2, 3, 0);
+        _areaNote.MaximumSize = new Size(700, 0);
+        _areaNote.Text = "Plates are read in the whole picture, with no road perspective.";
+
+        _areaTools.AutoSize = true;
+        _areaTools.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _areaTools.Dock = DockStyle.Fill;
+        _areaTools.Margin = new Padding(0, 6, 0, 0);
+        _areaTools.Controls.Add(_editDetection);
+        _areaTools.Controls.Add(_editPerspective);
+        _areaTools.Controls.Add(_wholePicture);
+        _areaTools.Controls.Add(_removePerspective);
+        _areaTools.Controls.Add(_fromBirel);
+        _areaTools.Controls.Add(_areaNote);
+        _areaTools.SetFlowBreak(_fromBirel, true);
+
+        _left.RowCount = 3;
         _left.RowStyles.Add(new RowStyle(SizeType.Percent, 68F));
+        _left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _left.RowStyles.Add(new RowStyle(SizeType.Percent, 32F));
         _left.Controls.Add(_player, 0, 0);
-        _left.Controls.Add(_partList, 0, 1);
+        _left.Controls.Add(_areaTools, 0, 1);
+        _left.Controls.Add(_partList, 0, 2);
 
         // ================= Selected part =================
         _partTitle.AutoSize = true;
@@ -411,6 +464,13 @@ public sealed partial class LabelsDialog
         _useForSelected.Click += new EventHandler(OnUseForSelectedClick);
         _useAll.Click += new EventHandler(OnUseAllClick);
         _readPlates.Click += new EventHandler(OnReadPlatesClick);
+        _player.AreaChanged += new EventHandler(OnAreaChanged);
+        _player.EditingChanged += new EventHandler(OnAreaEditingChanged);
+        _editDetection.Click += new EventHandler(OnEditDetectionClick);
+        _editPerspective.Click += new EventHandler(OnEditPerspectiveClick);
+        _wholePicture.Click += new EventHandler(OnWholePictureClick);
+        _removePerspective.Click += new EventHandler(OnRemovePerspectiveClick);
+        _fromBirel.Click += new EventHandler(OnFromBirelClick);
 
         // ================= Form =================
         AcceptButton = _ok;
@@ -437,6 +497,8 @@ public sealed partial class LabelsDialog
         _carTools.PerformLayout();
         _editor.ResumeLayout(false);
         _editor.PerformLayout();
+        _areaTools.ResumeLayout(false);
+        _areaTools.PerformLayout();
         _left.ResumeLayout(false);
         _tools.ResumeLayout(false);
         _bottom.ResumeLayout(false);

@@ -14,6 +14,7 @@ public sealed class VideoFile : IDisposable
     private List<PlateMark> _plates = new();
     private List<VehicleMark> _vehicles = new();
     private List<double> _emptyParts = new();
+    private ReadArea _readArea = ReadArea.WholePicture;
     private MotionScan? _scan;
     private bool _scanIsAutomatic;
 
@@ -46,6 +47,9 @@ public sealed class VideoFile : IDisposable
 
     /// <summary>Moments in playing parts that were checked and have no vehicles, so those parts count as labelled.</summary>
     public IReadOnlyList<double> EmptyParts => _emptyParts;
+
+    /// <summary>Where plates are read: the detection area and road perspective (Birel Plaka's, per video).</summary>
+    public ReadArea ReadArea => _readArea;
 
     /// <summary>The parts of the video that play now: between the skips.</summary>
     public List<PlayingPart> PlayingParts => VehicleLabels.PlayingParts(_skips, Duration);
@@ -95,6 +99,7 @@ public sealed class VideoFile : IDisposable
             _plates = saved.Plates;
             _vehicles = saved.Vehicles;
             _emptyParts = saved.EmptyParts;
+            _readArea = saved.ReadArea;
 
             if (saved.FileExists)
             {
@@ -103,6 +108,7 @@ public sealed class VideoFile : IDisposable
                 if (saved.Scanned) parts.Add("motion data");
                 if (saved.Plates.Count > 0) parts.Add($"{saved.Plates.Count} plate(s)");
                 if (saved.Vehicles.Count > 0 || saved.EmptyParts.Count > 0) parts.Add(LabelSummary.Describe());
+                if (!saved.ReadArea.IsWholePicture) parts.Add("plate reading area");
                 Say($"{Name}: loaded {string.Join(", ", parts)}"
                     + (saved.FromOldFile ? $" from {System.IO.Path.GetFileName(VideoSidecar.OldPathFor(Path))} (moved to {System.IO.Path.GetFileName(VideoSidecar.PathFor(Path))} on the next change)." : "."));
             }
@@ -184,6 +190,19 @@ public sealed class VideoFile : IDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>Replaces where plates are read (detection area, road perspective) and saves it.</summary>
+    public void SetReadArea(ReadArea area)
+    {
+        if (area.SameAs(_readArea.DetectionText, _readArea.PerspectiveText))
+            return;
+
+        _readArea = area;
+        if (Save())
+            Say($"{Name}: plates are read in {area.Describe()} (saved).");
+
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     // ===================================================================== settings
 
     /// <summary>Gives the video its own settings, or null to go back to the defaults, and saves.</summary>
@@ -261,7 +280,7 @@ public sealed class VideoFile : IDisposable
     {
         try
         {
-            VideoSidecar.Save(Path, _skips, Motion, _ownSettings, _plates, _vehicles, _emptyParts);
+            VideoSidecar.Save(Path, _skips, Motion, _ownSettings, _plates, _vehicles, _emptyParts, _readArea);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

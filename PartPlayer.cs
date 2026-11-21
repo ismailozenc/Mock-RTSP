@@ -1,3 +1,4 @@
+using Birel_Plaka;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
@@ -16,7 +17,12 @@ namespace MockRtsp;
 ///   Mouse wheel: zoom around the mouse (to read a plate); drag: move the zoomed picture;
 ///   double-click: whole picture again
 ///   Keys (click the picture first): Space play/pause, Left/Right one frame back/forward
+/// It also shows where plates are read (<see cref="Area"/>) and lets it be drawn, as on a camera in
+/// Birel Plaka: R edits the detection area, P the road perspective (see <see cref="SetEditing"/>).
 /// </summary>
+/// <summary>What the player's mouse edits: nothing (play, zoom), the detection area or the road perspective.</summary>
+public enum AreaEdit { None, Detection, Perspective }
+
 public sealed class PartPlayer : Control
 {
     private static readonly double[] Speeds = { 0.25, 0.5, 1.0, 2.0 };
@@ -53,6 +59,27 @@ public sealed class PartPlayer : Control
     private PointF _focus = new(0.5f, 0.5f);    // the picture point (0 to 1) at the centre of the view
     private Point? _panFrom;
     private bool _seekDragging;
+
+    // Plate reading area (fractions of the picture) and its editing.
+    private ReadArea _area = ReadArea.WholePicture;
+    private AreaEdit _editing = AreaEdit.None;
+    private ReadArea? _areaAtEditStart;
+    private Grip _grip = Grip.None;             // what the left button holds in detection editing
+    private RectangleF _rectAtGrip;
+    private PointF _gripFrom;
+    private int _corner = -1;                   // perspective: 0-3 a corner, 4 the whole shape
+    private PointF[]? _cornersAtGrip;
+    private const int HandleSize = 8;
+    private const int CornerGrab = 12;
+    private const float MinAreaSize = 0.02f;
+
+    private enum Grip { None, Body, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
+
+    /// <summary>Raised when the user changes the area (after each drag, a reset or an undo).</summary>
+    public event EventHandler? AreaChanged;
+
+    /// <summary>Raised when editing starts or stops.</summary>
+    public event EventHandler? EditingChanged;
 
     /// <summary>Raised when the picture shown changes (another moment of the video).</summary>
     public event EventHandler? PositionChanged;
@@ -350,6 +377,7 @@ public sealed class PartPlayer : Control
                 g.InterpolationMode = _zoom > 1.01 ? InterpolationMode.HighQualityBicubic : InterpolationMode.Bilinear;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
                 g.DrawImage(_picture, FitRect(), SourceRect(), GraphicsUnit.Pixel);
+                DrawArea(g);
 
                 if (_zoom > 1.01)
                 {
@@ -404,6 +432,12 @@ public sealed class PartPlayer : Control
     {
         base.OnMouseDown(e);
         Focus();
+        if (_editing != AreaEdit.None && _picture is not null && VideoArea.Contains(e.Location))
+        {
+            AreaMouseDown(e);
+            return;
+        }
+
         if (e.Button != MouseButtons.Left)
             return;
 
@@ -423,6 +457,12 @@ public sealed class PartPlayer : Control
     {
         base.OnMouseMove(e);
 
+        if (_editing != AreaEdit.None && !_seekDragging)
+        {
+            AreaMouseMove(e);
+            return;
+        }
+
         if (_panFrom is Point from)
         {
             var fit = FitRect();
@@ -437,6 +477,16 @@ public sealed class PartPlayer : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+
+        if (_grip != Grip.None || _corner >= 0)
+        {
+            _grip = Grip.None;
+            _corner = -1;
+            _cornersAtGrip = null;
+            AreaChanged?.Invoke(this, EventArgs.Empty);
+            Invalidate(VideoArea);
+            return;
+        }
 
         if (_seekDragging)
         {
@@ -489,7 +539,9 @@ public sealed class PartPlayer : Control
     }
 
     protected override bool IsInputKey(Keys keyData) =>
-        keyData is Keys.Left or Keys.Right or Keys.Space || base.IsInputKey(keyData);
+        keyData is Keys.Left or Keys.Right or Keys.Space
+        || (keyData == Keys.Escape && _editing != AreaEdit.None)     // undo, not the dialog's Cancel
+        || base.IsInputKey(keyData);
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -508,6 +560,366 @@ public sealed class PartPlayer : Control
                 StepFrame(+1);
                 e.Handled = true;
                 break;
+            case Keys.R:
+                SetEditing(_editing == AreaEdit.Detection ? AreaEdit.None : AreaEdit.Detection);
+                e.Handled = true;
+                break;
+            case Keys.P:
+                SetEditing(_editing == AreaEdit.Perspective ? AreaEdit.None : AreaEdit.Perspective);
+                e.Handled = true;
+                break;
+            case Keys.Escape when _editing != AreaEdit.None && _areaAtEditStart is not null:
+                _grip = Grip.None;
+                _corner = -1;
+                _area = _areaAtEditStart;               // undo everything since editing started
+                AreaChanged?.Invoke(this, EventArgs.Empty);
+                Invalidate(VideoArea);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    // ===================================================================== plate reading area
+
+    /// <summary>Where plates are read, shown on the picture (fractions of the picture).</summary>
+    public ReadArea Area
+    {
+        get => _area;
+        set
+        {
+            _area = value;
+            Invalidate(VideoArea);
+        }
+    }
+
+    public AreaEdit Editing => _editing;
+
+    /// <summary>
+    /// Starts or stops editing the detection area or the road perspective. Starting the perspective
+    /// with none drawn places Birel Plaka's default shape.
+    /// </summary>
+    public void SetEditing(AreaEdit editing)
+    {
+        if (editing == _editing)
+            return;
+
+        _grip = Grip.None;
+        _corner = -1;
+        _editing = editing;
+        _areaAtEditStart = editing == AreaEdit.None ? null : _area;
+
+        if (editing == AreaEdit.Perspective && _area.Perspective is null)
+        {
+            _area = _area.WithPerspective(RoadPerspective.DefaultCorners(new RectangleF(0, 0, 1, 1)));
+            AreaChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        if (editing != AreaEdit.None)
+            Focus();
+        Cursor = Cursors.Default;
+        Invalidate(VideoArea);
+        EditingChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>A picture point (fractions) on the screen, at the current zoom.</summary>
+    private PointF ToScreen(PointF p)
+    {
+        var fit = FitRect();
+        var src = SourceRect();
+        return new PointF(
+            fit.X + (p.X * _width - src.X) / src.Width * fit.Width,
+            fit.Y + (p.Y * _height - src.Y) / src.Height * fit.Height);
+    }
+
+    /// <summary>The picture point (fractions, clamped to the picture) under a screen point.</summary>
+    private PointF ToPicture(Point p)
+    {
+        var fit = FitRect();
+        var src = SourceRect();
+        return new PointF(
+            Clamp((src.X + (p.X - fit.X) / fit.Width * src.Width) / _width, 0, 1),
+            Clamp((src.Y + (p.Y - fit.Y) / fit.Height * src.Height) / _height, 0, 1));
+    }
+
+    private RectangleF ScreenRect(RectangleF r)
+    {
+        var a = ToScreen(r.Location);
+        var b = ToScreen(new PointF(r.Right, r.Bottom));
+        return RectangleF.FromLTRB(a.X, a.Y, b.X, b.Y);
+    }
+
+    private RectangleF DetectionOrWhole => _area.Detection ?? new RectangleF(0, 0, 1, 1);
+
+    private void DrawArea(Graphics g)
+    {
+        var fit = FitRect();
+        var clip = g.Clip;
+        g.SetClip(fit);
+        var smoothing = g.SmoothingMode;
+        try
+        {
+            DrawPerspective(g);
+
+            if (_editing == AreaEdit.Detection || _area.Detection is not null)
+            {
+                var rect = ScreenRect(DetectionOrWhole);
+                if (_editing == AreaEdit.Detection)
+                {
+                    // Darker outside the area: what the detector never sees.
+                    using var dim = new SolidBrush(Color.FromArgb(120, 0, 0, 0));
+                    g.FillRectangle(dim, fit.Left, fit.Top, fit.Width, rect.Top - fit.Top);
+                    g.FillRectangle(dim, fit.Left, rect.Bottom, fit.Width, fit.Bottom - rect.Bottom);
+                    g.FillRectangle(dim, fit.Left, rect.Top, rect.Left - fit.Left, rect.Height);
+                    g.FillRectangle(dim, rect.Right, rect.Top, fit.Right - rect.Right, rect.Height);
+                }
+
+                using var pen = new Pen(Color.Lime, 2);
+                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+
+                if (_editing == AreaEdit.Detection)
+                {
+                    foreach (var handle in Handles(rect))
+                        g.FillRectangle(Brushes.Lime, handle);
+                }
+            }
+        }
+        finally
+        {
+            g.SmoothingMode = smoothing;
+            g.Clip = clip;
+        }
+
+        if (_editing == AreaEdit.Detection)
+            DrawHint(g, _area.Detection is null
+                ? "Detection area: drag over the picture to draw it (now the whole picture is read). Esc: undo. R: done."
+                : "Detection area: drag its edges or corners, drag inside to move it, drag outside it to draw a new one. "
+                  + "Right-click: whole picture. Esc: undo. R: done.");
+        else if (_editing == AreaEdit.Perspective)
+            DrawHint(g, "Road perspective: drag the 4 corners onto the lane edges (a rectangle lying on the road). "
+                        + "Drag inside to move it. Right-click: reset. Esc: undo. P: done.");
+    }
+
+    private void DrawPerspective(Graphics g)
+    {
+        if (_area.Perspective is not { } corners)
+            return;
+
+        var shown = corners.Select(ToScreen).ToArray();
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        if (_editing != AreaEdit.Perspective)
+        {
+            using var faint = new Pen(Color.FromArgb(170, Color.Gold), 1.5f) { DashStyle = DashStyle.Dash };
+            g.DrawPolygon(faint, shown);
+            return;
+        }
+
+        // A grid "painted on the road": if it looks like evenly spaced marks lying flat on the road, it is right.
+        if (RoadPerspective.Create(shown, minArea: 100) is { } road)
+        {
+            using var grid = new Pen(Color.FromArgb(150, Color.Gold), 1f);
+            for (int i = 1; i < 4; i++)
+                g.DrawLine(grid, road.ToPicture(i / 4.0, 0), road.ToPicture(i / 4.0, 1));
+            for (int i = 1; i < 6; i++)
+                g.DrawLine(grid, road.ToPicture(0, i / 6.0), road.ToPicture(1, i / 6.0));
+        }
+
+        using (var pen = new Pen(Color.Gold, 2f))
+            g.DrawPolygon(pen, shown);
+        foreach (var c in shown)
+            g.FillEllipse(Brushes.Gold, c.X - 5, c.Y - 5, 10, 10);
+
+        DrawLabel(g, "far", Middle(shown[RoadPerspective.FarLeft], shown[RoadPerspective.FarRight]), above: true);
+        DrawLabel(g, "near", Middle(shown[RoadPerspective.NearRight], shown[RoadPerspective.NearLeft]), above: false);
+    }
+
+    private static PointF Middle(PointF a, PointF b) => new((a.X + b.X) / 2, (a.Y + b.Y) / 2);
+
+    private void DrawLabel(Graphics g, string text, PointF at, bool above)
+    {
+        var size = TextRenderer.MeasureText(text, Font);
+        float y = above ? at.Y - size.Height - 6 : at.Y + 6;
+        var box = new Rectangle((int)(at.X - size.Width / 2f) - 3, (int)y, size.Width + 6, size.Height);
+        using var back = new SolidBrush(Color.FromArgb(170, 0, 0, 0));
+        g.FillRectangle(back, box);
+        TextRenderer.DrawText(g, text, Font, box, Color.Gold, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+
+    /// <summary>How to edit, at the bottom of the picture (the zoom note is at the top).</summary>
+    private void DrawHint(Graphics g, string text)
+    {
+        var area = VideoArea;
+        int width = Math.Max(80, area.Width - 12);
+        var size = TextRenderer.MeasureText(g, text, Font, new Size(width, 0), TextFormatFlags.WordBreak);
+        var box = new Rectangle(area.Left + 6, area.Bottom - size.Height - 8, width, size.Height + 4);
+        using var back = new SolidBrush(Color.FromArgb(185, 0, 0, 0));
+        g.FillRectangle(back, box);
+        TextRenderer.DrawText(g, text, Font, box, Color.White, TextFormatFlags.WordBreak | TextFormatFlags.VerticalCenter);
+    }
+
+    private static RectangleF[] Handles(RectangleF r)
+    {
+        float s = HandleSize, h = s / 2;
+        return new[]
+        {
+            new RectangleF(r.Left - h, r.Top - h, s, s), new RectangleF(r.Right - h, r.Top - h, s, s),
+            new RectangleF(r.Left - h, r.Bottom - h, s, s), new RectangleF(r.Right - h, r.Bottom - h, s, s),
+            new RectangleF(r.Left - h, r.Top + r.Height / 2 - h, s, s), new RectangleF(r.Right - h, r.Top + r.Height / 2 - h, s, s),
+            new RectangleF(r.Left + r.Width / 2 - h, r.Top - h, s, s), new RectangleF(r.Left + r.Width / 2 - h, r.Bottom - h, s, s)
+        };
+    }
+
+    /// <summary>The corner handles, then any point near an edge, then inside.</summary>
+    private Grip GripAt(Point p)
+    {
+        var rect = ScreenRect(DetectionOrWhole);
+        var h = Handles(rect).Select(r => RectangleF.Inflate(r, 3, 3)).ToArray();
+        if (h[0].Contains(p)) return Grip.TopLeft;
+        if (h[1].Contains(p)) return Grip.TopRight;
+        if (h[2].Contains(p)) return Grip.BottomLeft;
+        if (h[3].Contains(p)) return Grip.BottomRight;
+
+        const float Near = 6;
+        bool alongX = p.X >= rect.Left - Near && p.X <= rect.Right + Near;
+        bool alongY = p.Y >= rect.Top - Near && p.Y <= rect.Bottom + Near;
+        if (alongY && Math.Abs(p.X - rect.Left) <= Near) return Grip.Left;
+        if (alongY && Math.Abs(p.X - rect.Right) <= Near) return Grip.Right;
+        if (alongX && Math.Abs(p.Y - rect.Top) <= Near) return Grip.Top;
+        if (alongX && Math.Abs(p.Y - rect.Bottom) <= Near) return Grip.Bottom;
+        return rect.Contains(p) ? Grip.Body : Grip.None;
+    }
+
+    private int CornerAt(Point p)
+    {
+        if (_area.Perspective is not { } corners)
+            return -1;
+
+        var shown = corners.Select(ToScreen).ToArray();
+        for (int i = 0; i < 4; i++)
+        {
+            float dx = p.X - shown[i].X, dy = p.Y - shown[i].Y;
+            if (dx * dx + dy * dy <= CornerGrab * CornerGrab)
+                return i;
+        }
+
+        using var path = new GraphicsPath();
+        path.AddPolygon(shown);
+        return path.IsVisible(p) ? 4 : -1;
+    }
+
+    private void AreaMouseDown(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Right)
+        {
+            _area = _editing == AreaEdit.Detection
+                ? _area.WithDetection(null)
+                : _area.WithPerspective(RoadPerspective.DefaultCorners(new RectangleF(0, 0, 1, 1)));
+            AreaChanged?.Invoke(this, EventArgs.Empty);
+            Invalidate(VideoArea);
+            return;
+        }
+
+        if (e.Button != MouseButtons.Left)
+            return;
+
+        _gripFrom = ToPicture(e.Location);
+        if (_editing == AreaEdit.Detection)
+        {
+            _rectAtGrip = DetectionOrWhole;
+            _grip = _area.Detection is null ? Grip.None : GripAt(e.Location);
+            if (_grip == Grip.None)
+            {
+                // A new area from here (with none drawn yet, the first drag draws it).
+                _rectAtGrip = new RectangleF(_gripFrom, SizeF.Empty);
+                _grip = Grip.BottomRight;
+            }
+        }
+        else
+        {
+            _corner = CornerAt(e.Location);
+            _cornersAtGrip = _area.Perspective?.ToArray();
+        }
+    }
+
+    private void AreaMouseMove(MouseEventArgs e)
+    {
+        if (_editing == AreaEdit.Detection)
+        {
+            if (_grip == Grip.None)
+            {
+                Cursor = GripAt(e.Location) switch
+                {
+                    Grip.Body => Cursors.SizeAll,
+                    Grip.Left or Grip.Right => Cursors.SizeWE,
+                    Grip.Top or Grip.Bottom => Cursors.SizeNS,
+                    Grip.TopLeft or Grip.BottomRight => Cursors.SizeNWSE,
+                    Grip.TopRight or Grip.BottomLeft => Cursors.SizeNESW,
+                    _ => Cursors.Cross
+                };
+                return;
+            }
+
+            var at = ToPicture(e.Location);
+            var r = _rectAtGrip;
+            float left = r.Left, top = r.Top, right = r.Right, bottom = r.Bottom;
+            if (_grip == Grip.Body)
+            {
+                float dx = Clamp(at.X - _gripFrom.X, -r.Left, 1 - r.Right);
+                float dy = Clamp(at.Y - _gripFrom.Y, -r.Top, 1 - r.Bottom);
+                left += dx; right += dx; top += dy; bottom += dy;
+            }
+            else
+            {
+                if (_grip is Grip.Left or Grip.TopLeft or Grip.BottomLeft) left = at.X;
+                if (_grip is Grip.Right or Grip.TopRight or Grip.BottomRight) right = at.X;
+                if (_grip is Grip.Top or Grip.TopLeft or Grip.TopRight) top = at.Y;
+                if (_grip is Grip.Bottom or Grip.BottomLeft or Grip.BottomRight) bottom = at.Y;
+            }
+
+            var moved = RectangleF.FromLTRB(Math.Min(left, right), Math.Min(top, bottom), Math.Max(left, right), Math.Max(top, bottom));
+            // At least a small area, kept inside the picture.
+            if (moved.Width < MinAreaSize)
+                moved.Width = MinAreaSize;
+            if (moved.Height < MinAreaSize)
+                moved.Height = MinAreaSize;
+            moved.X = Math.Min(moved.X, 1 - moved.Width);
+            moved.Y = Math.Min(moved.Y, 1 - moved.Height);
+            _area = _area.WithDetection(moved);
+            Invalidate(VideoArea);
+            return;
+        }
+
+        if (_corner < 0 || _cornersAtGrip is null)
+        {
+            Cursor = CornerAt(e.Location) switch
+            {
+                >= 0 and < 4 => Cursors.Hand,
+                4 => Cursors.SizeAll,
+                _ => Cursors.Default
+            };
+            return;
+        }
+
+        var point = ToPicture(e.Location);
+        var corners = _cornersAtGrip.ToArray();
+        if (_corner == 4)
+        {
+            // The whole shape, kept inside the picture.
+            float dx = Clamp(point.X - _gripFrom.X, -corners.Min(p => p.X), 1 - corners.Max(p => p.X));
+            float dy = Clamp(point.Y - _gripFrom.Y, -corners.Min(p => p.Y), 1 - corners.Max(p => p.Y));
+            for (int i = 0; i < 4; i++)
+                corners[i] = new PointF(corners[i].X + dx, corners[i].Y + dy);
+        }
+        else
+        {
+            corners[_corner] = point;
+        }
+
+        // Only a proper (convex, not crossing) shape, at least about 10 x 10 picture pixels.
+        if (RoadPerspective.IsValidShape(corners.Select(p => new PointF(p.X * _width, p.Y * _height)).ToArray(), minArea: 100))
+        {
+            _area = _area.WithPerspective(corners);
+            Invalidate(VideoArea);
         }
     }
 

@@ -10,7 +10,9 @@ namespace MockRtsp;
 /// through the rest, and "Move the camera here" jumps the camera's stream to the part.
 /// "Read plates in every part" reads the plates of all playing parts with Birel Plaka's models and
 /// logic (<see cref="PlateScanner"/>); each part then lists the cars found, with a picture of the
-/// plate, every reading and the direction, to add as vehicles after checking them.
+/// plate, every reading and the direction, to add as vehicles after checking them. Plates are read
+/// where Birel Plaka would read them on a camera: inside the detection area, with the road
+/// perspective for the direction, both drawn on the player or taken from Birel Plaka's settings.
 /// The layout lives in LabelsDialog.Designer.cs.
 /// </summary>
 public sealed partial class LabelsDialog : Form
@@ -32,10 +34,11 @@ public sealed partial class LabelsDialog : Form
     private readonly HashSet<PlateCar> _used = new(ReferenceEqualityComparer.Instance);   // added as vehicles in this dialog
     private CancellationTokenSource? _scanCancel;
     private bool _selectingCar;          // set while the code (not the user) selects a car
+    private static string? _birelSettingsFile;       // the camera-settings.ini chosen last (this run)
 
     /// <summary>Parameterless constructor for the designer.</summary>
     public LabelsDialog() : this("video.mp4", new VideoInfo(1920, 1080, 25, 60), null, Array.Empty<SkipRange>(),
-        Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null, null, null)
+        Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null, null, null, ReadArea.WholePicture)
     {
     }
 
@@ -46,12 +49,14 @@ public sealed partial class LabelsDialog : Form
     /// <param name="seekCamera">Jumps that camera to a moment in this video, or null when none plays it.</param>
     /// <param name="plateScan">The video's saved plate scan, or null.</param>
     /// <param name="createScanner">Makes a plate scanner (loads the models), or null when plates cannot be read here.</param>
+    /// <param name="readArea">Where plates are read in this video (detection area, road perspective).</param>
     internal LabelsDialog(string videoPath, VideoInfo info, string? ffmpegPath, IReadOnlyList<SkipRange> skips,
         IReadOnlyList<VehicleMark> vehicles, IReadOnlyList<double> emptyParts,
         Func<double>? cameraPosition, double? showAt, Action<double>? seekCamera,
-        PlateScan? plateScan, Func<PlateScanner>? createScanner)
+        PlateScan? plateScan, Func<PlateScanner>? createScanner, ReadArea readArea)
     {
         InitializeComponent();
+        _player.Area = readArea;
 
         _videoPath = videoPath;
         _info = info;
@@ -77,6 +82,7 @@ public sealed partial class LabelsDialog : Form
             : "Jumps the camera's stream to the start of this part.";
 
         FillParts();
+        ShowArea();
 
         double? around = showAt ?? cameraPosition?.Invoke();
         int first = around is double t ? _parts.FindIndex(p => p.Contains(t, _duration)) : -1;
@@ -93,6 +99,126 @@ public sealed partial class LabelsDialog : Form
 
     /// <summary>Moments in parts checked as having no vehicles. Read after OK.</summary>
     public IReadOnlyList<double> EmptyParts { get; private set; } = Array.Empty<double>();
+
+    /// <summary>Where plates are read (detection area, road perspective). Read after OK.</summary>
+    public ReadArea ReadArea => _player.Area;
+
+    // ===================================================================== where plates are read
+
+    /// <summary>The area's buttons and note, and whether the plates shown were read with another area.</summary>
+    private void ShowArea()
+    {
+        var area = _player.Area;
+        _editDetection.Checked = _player.Editing == AreaEdit.Detection;
+        _editPerspective.Checked = _player.Editing == AreaEdit.Perspective;
+        _wholePicture.Enabled = area.Detection is not null;
+        _removePerspective.Enabled = area.Perspective is not null;
+
+        string note = $"Plates are read in {area.Describe()}.";
+        if (_scan is not null && !area.SameAs(_scan.DetectionArea, _scan.RoadPerspective))
+            note += " The plates shown were read with another area: read them again to use this one.";
+        _areaNote.Text = note;
+    }
+
+    private void OnAreaChanged(object? sender, EventArgs e) => ShowArea();
+
+    private void OnAreaEditingChanged(object? sender, EventArgs e) => ShowArea();
+
+    private void OnEditDetectionClick(object? sender, EventArgs e) =>
+        _player.SetEditing(_player.Editing == AreaEdit.Detection ? AreaEdit.None : AreaEdit.Detection);
+
+    private void OnEditPerspectiveClick(object? sender, EventArgs e) =>
+        _player.SetEditing(_player.Editing == AreaEdit.Perspective ? AreaEdit.None : AreaEdit.Perspective);
+
+    private void OnWholePictureClick(object? sender, EventArgs e)
+    {
+        _player.SetEditing(AreaEdit.None);
+        _player.Area = _player.Area.WithDetection(null);
+        ShowArea();
+    }
+
+    private void OnRemovePerspectiveClick(object? sender, EventArgs e)
+    {
+        _player.SetEditing(AreaEdit.None);
+        _player.Area = _player.Area.WithPerspective(null);
+        ShowArea();
+    }
+
+    /// <summary>
+    /// Takes the detection area and road perspective of one of Birel Plaka's cameras, from its
+    /// camera-settings.ini (next to Birel Plaka.exe, or in profiles\&lt;name&gt;\). The file is only read.
+    /// </summary>
+    private void OnFromBirelClick(object? sender, EventArgs e)
+    {
+        string? path = _birelSettingsFile is not null && File.Exists(_birelSettingsFile) ? _birelSettingsFile : null;
+        if (path is null)
+        {
+            using var open = new OpenFileDialog
+            {
+                Title = "Birel Plaka's camera settings",
+                Filter = $"Birel Plaka camera settings ({BirelCameraSettings.FileName})|{BirelCameraSettings.FileName}|INI files (*.ini)|*.ini",
+                FileName = BirelCameraSettings.FileName
+            };
+            if (path is not null)
+                open.InitialDirectory = Path.GetDirectoryName(path);
+            if (open.ShowDialog(this) != DialogResult.OK)
+                return;
+            path = open.FileName;
+        }
+
+        List<BirelCamera> cameras;
+        try
+        {
+            cameras = BirelCameraSettings.Read(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            MessageBox.Show(this, ex.Message, "From Birel Plaka", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _birelSettingsFile = path;
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(new ToolStripMenuItem($"Cameras in {path}") { Enabled = false });
+        menu.Items.Add(new ToolStripSeparator());
+        foreach (var camera in cameras)
+        {
+            var item = new ToolStripMenuItem(camera.Describe()) { Enabled = camera.Roi is not null || camera.Perspective is not null };
+            item.Click += (_, _) => TakeFromBirel(camera);
+            menu.Items.Add(item);
+        }
+
+        menu.Items.Add(new ToolStripSeparator());
+        var other = new ToolStripMenuItem("Another camera-settings.ini...");
+        other.Click += (_, _) =>
+        {
+            _birelSettingsFile = null;
+            BeginInvoke(new Action(() => OnFromBirelClick(sender, e)));
+        };
+        menu.Items.Add(other);
+        menu.Closed += (_, _) => menu.BeginInvoke(new Action(menu.Dispose));
+        menu.Show(_fromBirel, new Point(0, _fromBirel.Height));
+    }
+
+    private void TakeFromBirel(BirelCamera camera)
+    {
+        ReadArea area;
+        try
+        {
+            area = camera.ToReadArea();
+        }
+        catch (FormatException ex)
+        {
+            MessageBox.Show(this, $"The area of {camera.Name} cannot be used:\n\n{ex.Message}", "From Birel Plaka",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _player.SetEditing(AreaEdit.None);
+        _player.Area = area;
+        ShowArea();
+        _scanStatus.Text = $"Took the area of {camera.Name} ({camera.Section}). Birel Plaka keeps them as fractions of the picture, so they fit any size of the same view.";
+    }
 
     // ===================================================================== the list of parts
 
@@ -582,6 +708,8 @@ public sealed partial class LabelsDialog : Form
         var parts = _parts.ToList();
         string path = _videoPath;
         var info = _info;
+        var area = _player.Area;
+        _player.SetEditing(AreaEdit.None);
         var watch = System.Diagnostics.Stopwatch.StartNew();
         long lastShown = 0;
 
@@ -613,7 +741,7 @@ public sealed partial class LabelsDialog : Form
             var scan = await Task.Run(() =>
             {
                 using var scanner = create();
-                return scanner.Scan(path, info, parts, Progress, cancel.Token);
+                return scanner.Scan(path, info, parts, area, Progress, cancel.Token);
             }, cancel.Token);
 
             if (IsDisposed)
@@ -634,6 +762,7 @@ public sealed partial class LabelsDialog : Form
             _scanStatus.Text = $"Read {scan.Cars.Count} car(s) in {parts.Count} part(s) in {watch.Elapsed.TotalSeconds:0} s.{saved}";
             RefreshParts();
             ShowCars();
+            ShowArea();
         }
         catch (OperationCanceledException)
         {

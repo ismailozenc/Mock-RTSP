@@ -11,8 +11,10 @@ public sealed record PlateHit(RectangleF Box, float Confidence, OcrResult Ocr);
 /// Birel Plaka's plate detector and OCR (its Detector and PlateOCR), with the same models, inputs and
 /// outputs, but without OpenCV: the frame comes from FFmpeg as RGB bytes and is cropped and resized
 /// here, with the same bilinear sampling as OpenCV's INTER_LINEAR.
-///   Detector: the whole frame stretched to the model's input (1x3xHxW, RGB, 0..1); output rows of 7
-///             values (batch, x1, y1, x2, y2, class, score); boxes below the threshold are dropped.
+///   Detector: the detection area of the frame (Birel Plaka's ROI; the whole frame when none is drawn)
+///             stretched to the model's input (1x3xHxW, RGB, 0..1); output rows of 7 values (batch, x1,
+///             y1, x2, y2, class, score); boxes below the threshold are dropped, the rest are clamped
+///             to the area.
 ///   OCR:      each box cropped from the frame and stretched to the plate config's size (1xHxWx3 RGB
 ///             bytes); outputs "plate" (slots x alphabet probabilities) and "region" (countries).
 /// Not thread-safe: one reader per scan.
@@ -114,13 +116,19 @@ public sealed class PlateReader : IDisposable
         return (inputName, config.Regions.Count > 0 ? new[] { PlateOutput, RegionOutput } : new[] { PlateOutput });
     }
 
-    /// <summary>The plates in one frame: RGB bytes, rows of width * 3.</summary>
-    public List<PlateHit> Read(byte[] rgb, int width, int height)
+    /// <summary>
+    /// The plates inside <paramref name="area"/> of one frame (RGB bytes, rows of width * 3). Boxes are
+    /// in frame pixels.
+    /// </summary>
+    public List<PlateHit> Read(byte[] rgb, int width, int height, Rectangle area)
     {
         var hits = new List<PlateHit>();
+        area.Intersect(new Rectangle(0, 0, width, height));
+        if (area.Width <= 0 || area.Height <= 0)
+            return hits;
 
-        // Detector: the whole frame stretched to the model's input, planar RGB scaled to 0..1.
-        Resize(rgb, width, 0, 0, width, height, _resized, _inputWidth, _inputHeight);
+        // Detector: the area stretched to the model's input, planar RGB scaled to 0..1.
+        Resize(rgb, width, area.X, area.Y, area.Width, area.Height, _resized, _inputWidth, _inputHeight);
         int plane = _inputWidth * _inputHeight;
         for (int i = 0; i < plane; i++)
         {
@@ -134,8 +142,8 @@ public sealed class PlateReader : IDisposable
         using (var results = _detector.Run(new[] { NamedOnnxValue.CreateFromTensor(_detectorInput, input) }))
             rows = results.First().AsTensor<float>().ToArray();
 
-        float scaleX = (float)width / _inputWidth;
-        float scaleY = (float)height / _inputHeight;
+        float scaleX = (float)area.Width / _inputWidth;
+        float scaleY = (float)area.Height / _inputHeight;
         const int Step = 7;
 
         for (int i = 0; i < rows.Length / Step; i++)
@@ -145,18 +153,19 @@ public sealed class PlateReader : IDisposable
             if (confidence < _threshold)
                 continue;
 
-            int x1 = Math.Max(0, Math.Min((int)(rows[o + 1] * scaleX), width - 1));
-            int y1 = Math.Max(0, Math.Min((int)(rows[o + 2] * scaleY), height - 1));
-            int x2 = Math.Max(0, Math.Min((int)(rows[o + 3] * scaleX), width));
-            int y2 = Math.Max(0, Math.Min((int)(rows[o + 4] * scaleY), height));
+            // Relative to the area and clamped to it, as Birel Plaka's Detector does with its ROI image.
+            int x1 = Math.Max(0, Math.Min((int)(rows[o + 1] * scaleX), area.Width - 1));
+            int y1 = Math.Max(0, Math.Min((int)(rows[o + 2] * scaleY), area.Height - 1));
+            int x2 = Math.Max(0, Math.Min((int)(rows[o + 3] * scaleX), area.Width));
+            int y2 = Math.Max(0, Math.Min((int)(rows[o + 4] * scaleY), area.Height));
             if (x2 - x1 <= 0 || y2 - y1 <= 0)
                 continue;
 
-            OcrResult ocr = ReadPlate(rgb, width, x1, y1, x2 - x1, y2 - y1);
+            OcrResult ocr = ReadPlate(rgb, width, area.X + x1, area.Y + y1, x2 - x1, y2 - y1);
             if (string.IsNullOrWhiteSpace(ocr.Text))
                 continue;           // as in Birel Plaka: only empty reads are dropped here
 
-            hits.Add(new PlateHit(new RectangleF(x1, y1, x2 - x1, y2 - y1), confidence, ocr));
+            hits.Add(new PlateHit(new RectangleF(area.X + x1, area.Y + y1, x2 - x1, y2 - y1), confidence, ocr));
         }
 
         return hits;

@@ -12,13 +12,14 @@ public sealed record SavedVideo(
     bool FromOldFile,
     List<PlateMark> Plates,
     List<VehicleMark> Vehicles,
-    List<double> EmptyParts)
+    List<double> EmptyParts,
+    ReadArea ReadArea)
 {
     /// <summary>True once the video has been scanned for motion, so it is not scanned again on load.</summary>
     public bool Scanned => Motion is not null;
 
     public static SavedVideo None => new(new List<SkipRange>(), null, null, false, false, new List<PlateMark>(),
-        new List<VehicleMark>(), new List<double>());
+        new List<VehicleMark>(), new List<double>(), ReadArea.WholePicture);
 }
 
 /// <summary>
@@ -31,6 +32,7 @@ public sealed record SavedVideo(
 ///   plates    ground truth: the licence plates visible in the video, and when
 ///   vehicles  ground truth: the vehicles in the playing parts, coming or going, with their plates
 ///   emptyParts moments in playing parts that were checked and have no vehicles
+///   detectionArea, roadPerspective  where plates are read (see ReadArea), in Birel Plaka's format
 /// Copy the file along with the video and all of this comes with it.
 /// Files from the previous version ("&lt;video file&gt;.skips.json") are read too, and replaced
 /// by the new file the first time it is saved.
@@ -89,7 +91,8 @@ public static class VideoSidecar
             return new SavedVideo(SkipRanges.Normalize(ranges, durationSeconds), motion, file?.Settings, true, fromOld,
                 PlateMarks.Normalize(plates, durationSeconds),
                 VehicleLabels.Normalize(vehicles, durationSeconds),
-                VehicleLabels.NormalizeEmpty(file?.EmptyParts ?? new List<double>(), durationSeconds));
+                VehicleLabels.NormalizeEmpty(file?.EmptyParts ?? new List<double>(), durationSeconds),
+                ReadArea.Parse(file?.DetectionArea, file?.RoadPerspective));
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
@@ -103,14 +106,17 @@ public static class VideoSidecar
     /// the previous version is removed once its content is in the new file.
     /// </summary>
     public static void Save(string videoPath, IReadOnlyList<SkipRange> ranges, MotionProfile? motion, VideoSettings? settings,
-        IReadOnlyList<PlateMark>? plates = null, IReadOnlyList<VehicleMark>? vehicles = null, IReadOnlyList<double>? emptyParts = null)
+        IReadOnlyList<PlateMark>? plates = null, IReadOnlyList<VehicleMark>? vehicles = null, IReadOnlyList<double>? emptyParts = null,
+        ReadArea? readArea = null)
     {
         string path = PathFor(videoPath);
         plates ??= Array.Empty<PlateMark>();
         vehicles ??= Array.Empty<VehicleMark>();
         emptyParts ??= Array.Empty<double>();
+        readArea ??= ReadArea.WholePicture;
 
-        if (ranges.Count == 0 && motion is null && settings is null && plates.Count == 0 && vehicles.Count == 0 && emptyParts.Count == 0)
+        if (ranges.Count == 0 && motion is null && settings is null && plates.Count == 0 && vehicles.Count == 0 && emptyParts.Count == 0
+            && readArea.IsWholePicture)
         {
             if (File.Exists(path))
                 File.Delete(path);
@@ -138,6 +144,8 @@ public static class VideoSidecar
                     Plate = v.Plate.Length == 0 ? null : v.Plate
                 }).ToList(),
                 EmptyParts = emptyParts.Count == 0 ? null : emptyParts.Select(t => Math.Round(t, 3)).ToList(),
+                DetectionArea = readArea.DetectionText,
+                RoadPerspective = readArea.PerspectiveText,
                 Motion = motion is null ? null : new MotionEntry
                 {
                     IntervalSeconds = motion.IntervalSeconds,
@@ -168,6 +176,8 @@ public static class VideoSidecar
         public List<PlateEntry>? Plates { get; set; }
         public List<VehicleEntry>? Vehicles { get; set; }
         public List<double>? EmptyParts { get; set; }
+        public string? DetectionArea { get; set; }
+        public string? RoadPerspective { get; set; }
     }
 
     /// <summary>A ground-truth vehicle: when, "coming" or "going", and its plate (left out when not given).</summary>

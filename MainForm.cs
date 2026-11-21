@@ -349,9 +349,12 @@ public sealed partial class MainForm : Form, ICameraHost
             : null;
 
         using var dialog = new LabelsDialog(video.Path, video.Info, _ffmpegExe, video.Skips, video.Vehicles, video.EmptyParts,
-            position, showAt, seek, plateScan, createScanner);
+            position, showAt, seek, plateScan, createScanner, video.ReadArea);
         if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
             video.SetLabels(dialog.Vehicles, dialog.EmptyParts);
+            video.SetReadArea(dialog.ReadArea);
+        }
     }
 
     private void OnScoreClick(object? sender, EventArgs e) => Safe(() =>

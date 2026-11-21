@@ -84,6 +84,8 @@ internal sealed record PlateScan(
     string Detector,
     string Ocr,
     int IntervalMs,
+    string? DetectionArea,          // the ReadArea used (Birel Plaka's text format); null: whole picture / none
+    string? RoadPerspective,
     IReadOnlyList<ScannedPart> Parts,
     IReadOnlyList<PlateCar> Cars)
 {
@@ -173,10 +175,12 @@ internal sealed class PlateScanner : IDisposable
     }
 
     /// <summary>
-    /// Scans the parts. <paramref name="progress"/> gets the share done (0 to 1) and a line about it.
-    /// Throws OperationCanceledException when cancelled (nothing is returned then).
+    /// Scans the parts, reading plates only inside the area's detection area and using its road
+    /// perspective for the direction, as Birel Plaka does with a camera's. <paramref name="progress"/>
+    /// gets the share done (0 to 1) and a line about it. Throws OperationCanceledException when
+    /// cancelled (nothing is returned then).
     /// </summary>
-    public PlateScan Scan(string videoPath, VideoInfo info, IReadOnlyList<PlayingPart> parts,
+    public PlateScan Scan(string videoPath, VideoInfo info, IReadOnlyList<PlayingPart> parts, ReadArea area,
         Action<double, string> progress, CancellationToken cancel)
     {
         AppConfig.Travel = _settings.Travel;           // what the copied TravelEstimator reads
@@ -192,6 +196,10 @@ internal sealed class PlateScanner : IDisposable
             RegionCheck: null);
 
         var (width, height) = FrameSize(info);
+        Rectangle detection = area.DetectionPixels(width, height);
+        RoadPerspective? perspective = area.PerspectivePixels(width, height);
+        if (detection.Width <= 0 || detection.Height <= 0)
+            throw new InvalidOperationException("The detection area is empty at this picture size.");
         double fps = 1000.0 / _settings.IntervalMs;
         double total = Math.Max(1e-6, parts.Sum(p => p.Length));
         double done = 0;
@@ -212,16 +220,17 @@ internal sealed class PlateScanner : IDisposable
                 long time = (long)Math.Round(seconds * TicksPerSecond);
                 var closed = groups.CloseExpired(time);
 
-                var hits = _reader.Read(rgb, width, height);
+                var hits = _reader.Read(rgb, width, height, detection);
                 if (hits.Count > 0)
                 {
-                    var tracks = travel.Observe(hits.Select(h => h.Box).ToArray(), time, width, null);
+                    var tracks = travel.Observe(hits.Select(h => h.Box).ToArray(), time, width, perspective);
                     for (int i = 0; i < hits.Count; i++)
                     {
+                        // Edges of the detection area, as in Birel Plaka (the frame's edges are edges of the area too).
                         var hit = hits[i];
                         var read = new Birel_Plaka.PlateRead(hit.Ocr, hit.Confidence, hit.Box,
-                            touchesLeft: hit.Box.X <= _settings.EdgeMarginPixels,
-                            touchesRight: hit.Box.Right >= width - _settings.EdgeMarginPixels,
+                            touchesLeft: hit.Box.X - detection.X <= _settings.EdgeMarginPixels,
+                            touchesRight: hit.Box.Right >= detection.Right - _settings.EdgeMarginPixels,
                             time, DateTime.UnixEpoch.AddMilliseconds(time), tracks[i]);
                         var (_, closedNow) = groups.Add(read, () => new RgbFrame((byte[])rgb.Clone(), width, height));
                         closed.AddRange(closedNow);
@@ -239,7 +248,7 @@ internal sealed class PlateScanner : IDisposable
         }
 
         return new PlateScan(DateTime.UtcNow, PlateScanSettings.DetectorFile, PlateScanSettings.OcrFile, _settings.IntervalMs,
-            scanned, cars.OrderBy(c => c.Time).ToList());
+            area.DetectionText, area.PerspectiveText, scanned, cars.OrderBy(c => c.Time).ToList());
     }
 
     /// <summary>The video's size, scaled down to MaxFrameWidth; even width and height for FFmpeg.</summary>
@@ -380,7 +389,7 @@ internal sealed class PlateScanner : IDisposable
     {
         UndecidedReason.TooFewReads => $"Too few reads ({view.Votes}, at least {_settings.Rules.MinReads} needed)",
         UndecidedReason.NothingRead => "No characters could be read",
-        UndecidedReason.CutOff => "Plate may be cut off: most reads touch the edge of the picture",
+        UndecidedReason.CutOff => "Plate may be cut off: most reads touch the edge of the detection area",
         UndecidedReason.TooFewCover => $"Character {view.ReasonPosition} was seen by too few reads",
         UndecidedReason.Disagree => $"Reads disagree on character {view.ReasonPosition}",
         UndecidedReason.Dissent => $"Several reads back a different answer for character {view.ReasonPosition}",
