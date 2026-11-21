@@ -199,7 +199,7 @@ Settings are saved in `%APPDATA%\MockRtsp\options.json` (including any passwords
 
 The last 10 video folders are remembered in the dropdown next to **Video folder**, together with the other settings.
 
-When the server starts, any leftover `mediamtx.exe` from an earlier run of the same folder is stopped first.
+MediaMTX ends with the app, however the app ends (closed, crashed, or stopped from the debugger). When the server starts, any `mediamtx.exe` still left over from an earlier run of Mock RTSP (from this program folder or any other Mock RTSP build) is stopped first; other MediaMTX installations are left alone. If the port is still taken, the message names the MediaMTX processes running.
 
 The scanner keeps its folder, recent folders, the gap settings for new videos and the two "again" ticks in `%APPDATA%\MockRtsp\scanner.json`.
 
@@ -359,12 +359,13 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 ### MockRtsp\ (MockRtsp.exe, the RTSP app)
 
 - **`Program.cs`**: entry point. Installs last-resort exception handlers (UI thread, AppDomain, unobserved tasks) that report through ErrorReporter, then runs `MainForm`.
+- **`ChildProcesses.cs`**: `EndWithThisApp(process)` puts a process in a Windows job object with "kill on close", so it ends with the app however the app ends. MediaMtxServer uses it for MediaMTX. Does nothing off Windows; returns why when it cannot (then logged).
 - **`MediaMtxServer.cs`**: starts and owns one `mediamtx.exe`.
   - `StartAsync(port, exe, ..., log, options)` does the following:
     - checks the port range (RTP/RTCP need port+1000/+1001) and that the TCP/UDP ports are free
-    - stops leftover mediamtx processes started from the same exe path
+    - stops leftover mediamtx processes of Mock RTSP (`StopStaleInstances`: the same exe path, or `IsMockRtspCopy`: a `mediamtx` folder next to a MockRtsp program, so leftovers of another build folder are found too)
     - writes a minimal YAML config to a temp folder (`BuildConfig`: RTSP only, transports, timeouts, `authInternalUsers` for publisher and viewer logins, or `any` with no password)
-    - starts it, and waits until the port accepts connections
+    - starts it, ties it to the app (`ChildProcesses.EndWithThisApp`), and waits until the port accepts connections
   - `IsPathReadyAsync` sends a real RTSP DESCRIBE and expects 200 OK: "a viewer could play this now".
   - `GetPathStatsAsync` reads `/v3/paths/list` from MediaMTX's API (on `ApiPort`, a free local port chosen at start) and returns `PathStats(Ready, BytesReceived, Viewers)` per path, or null. Never throws.
   - `BuildUrl` puts logins in the URL. `Dispose` kills the process tree and deletes the temp folder.
@@ -529,6 +530,10 @@ Newest last. Commit hashes are on `main`.
 - The scanner lists a folder's videos with what each has, scans a queue of them (gaps, then plates and directions part by part) and shows the results while they are found: the motion graph grows, the gaps appear, each part's cars arrive and prefill it. The editor (the old labels dialog with the timeline and gap settings added) stays editable during a scan and saves every change at once.
 - The file next to each video is shared safely: each app writes only its own keys, under a lock both share; a damaged file is never overwritten. Motion settings moved from the stream settings to `motionSettings` (the settings the gaps were picked with); older files are converted on the first save. The scanner's own settings are in `scanner.json`.
 - Checked on Linux: all three projects compile against the .NET 8 Windows Forms reference assemblies (0 errors, 0 warnings); the file tests (both apps saving, from two threads at once, older and damaged files); the RTSP app's reload under Mono; the real models reporting parts one by one; and the scanner driven under Mono WinForms with screenshots (live graph, gaps, parts prefilled one by one, an edit while scanning, closing). That run found and fixed two bugs: a crash when the editor was created, and labels of the part on screen being lost when the window closed. Not yet run on Windows.
+
+**2026-11-21: fix: the RTSP server did not start after the split**
+- The split moved MockRtsp.exe to another build folder (`MockRtsp\bin\...`). A MediaMTX left running by the old build (stopping the debugger ends MockRtsp.exe but not its MediaMTX) kept the RTSP port, and the new build did not count it as its own, so the server could not start ("port already in use"). Leftovers of any Mock RTSP build are now stopped first, MediaMTX is tied to the app with a Windows job object so it can no longer be left behind, and the port-in-use message names the MediaMTX processes running.
+- Checked on Linux with MediaMTX 1.15.1: a MediaMTX left running from another build folder reproduced the failure with the code before the fix; with the fix it is stopped and the server starts; a camera streams the main stream and substream while scanner-style saves change the video's file 30 times (the camera follows the gaps, the server keeps running). The job object is Windows only and was compile-checked.
 
 ## Where we left off
 

@@ -169,9 +169,9 @@ public sealed class MediaMtxServer : IDisposable
         string exe = mediaMtxPath;
 
         // Leftovers from an earlier run would hold the ports, so end them before checking.
-        int stopped = StopStaleInstances(exe);
-        if (stopped > 0)
-            log?.Invoke($"Stopped {stopped} leftover MediaMTX process(es) from an earlier run.");
+        var stopped = StopStaleInstances(exe);
+        if (stopped.Count > 0)
+            log?.Invoke($"Stopped {stopped.Count} leftover MediaMTX process(es) from an earlier run: {string.Join(", ", stopped.Distinct())}.");
 
         EnsurePortFree(port);
 
@@ -199,6 +199,10 @@ public sealed class MediaMtxServer : IDisposable
 
             process = Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start MediaMTX.");
+
+            // Ended with the app however it ends, so it is never left holding the port.
+            if (ChildProcesses.EndWithThisApp(process) is { } notTied)
+                log?.Invoke($"Note: MediaMTX could not be tied to this app ({notTied}); if the app is killed, the next start stops it.");
 
             // Drain output so the server never blocks on a full pipe. Keep the last lines,
             // so a failed start can say why (for example a rejected config value).
@@ -338,10 +342,16 @@ public sealed class MediaMtxServer : IDisposable
     /// Ends mediamtx processes started from the same executable path as the one about to run.
     /// Other MediaMTX instances (different path, or started by another user) are left alone.
     /// </summary>
-    private static int StopStaleInstances(string exe)
+    /// <summary>
+    /// Stops MediaMTX processes left running by Mock RTSP: started from this mediamtx.exe, or from the
+    /// mediamtx folder of any Mock RTSP build (another build folder, for example the one used before
+    /// the solution was split into projects). Other MediaMTX installations are left alone.
+    /// Returns the paths of the ones stopped.
+    /// </summary>
+    private static List<string> StopStaleInstances(string exe)
     {
         string target = Path.GetFullPath(exe);
-        int stopped = 0;
+        var stopped = new List<string>();
 
         foreach (var process in Process.GetProcessesByName("mediamtx"))
         {
@@ -350,12 +360,12 @@ public sealed class MediaMtxServer : IDisposable
                 try
                 {
                     string? path = process.MainModule?.FileName;
-                    if (path is null || !string.Equals(path, target, StringComparison.OrdinalIgnoreCase))
+                    if (path is null || (!string.Equals(path, target, StringComparison.OrdinalIgnoreCase) && !IsMockRtspCopy(path)))
                         continue;
 
                     process.Kill(entireProcessTree: true);
                     process.WaitForExit(3000);
-                    stopped++;
+                    stopped.Add(path);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
                 {
@@ -365,6 +375,22 @@ public sealed class MediaMtxServer : IDisposable
         }
 
         return stopped;
+    }
+
+    /// <summary>True for a mediamtx executable inside a "mediamtx" folder next to a MockRtsp program.</summary>
+    internal static bool IsMockRtspCopy(string path)
+    {
+        for (var dir = Path.GetDirectoryName(path); dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            if (!string.Equals(Path.GetFileName(dir), Toolchain.MediaMtxFolder, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string? programFolder = Path.GetDirectoryName(dir);
+            return programFolder is not null
+                   && (File.Exists(Path.Combine(programFolder, "MockRtsp.exe")) || File.Exists(Path.Combine(programFolder, "MockRtsp.dll")));
+        }
+
+        return false;
     }
 
     private static void EnsurePortFree(int port)
@@ -394,9 +420,31 @@ public sealed class MediaMtxServer : IDisposable
         {
             throw new InvalidOperationException(
                 $"The {purpose} port {port} is already in use by another program. This is often a " +
-                "MediaMTX process left running from an earlier session. End mediamtx.exe in Task Manager " +
+                "MediaMTX process left running from an earlier session" + OtherMediaMtx() + ". End it in Task Manager " +
                 "or choose another port.", ex);
         }
+    }
+
+    /// <summary>The MediaMTX processes still running (not Mock RTSP's), for the port-in-use message.</summary>
+    private static string OtherMediaMtx()
+    {
+        var paths = new List<string>();
+        foreach (var process in Process.GetProcessesByName("mediamtx"))
+        {
+            using (process)
+            {
+                try
+                {
+                    paths.Add(process.MainModule?.FileName ?? $"process {process.Id}");
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+                {
+                    paths.Add($"process {process.Id}");
+                }
+            }
+        }
+
+        return paths.Count == 0 ? "" : $" (running now: {string.Join(", ", paths)})";
     }
 
     private static async Task WaitForPortAsync(
