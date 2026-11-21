@@ -25,6 +25,9 @@ public interface ICameraHost
     Task EditPlaylistAsync(CameraEntry entry);
     Task EditPlatesAsync(CameraEntry entry, VideoFile video);
 
+    /// <summary>Labels the playing parts of a video with their vehicles; showAt picks the part shown first.</summary>
+    Task EditLabelsAsync(CameraEntry entry, VideoFile video, double? showAt);
+
     /// <summary>Live numbers for the camera, or null while the server is not reporting them.</summary>
     CameraStats? StatsFor(CameraEntry entry);
     void ScanMotion(VideoFile video);
@@ -99,6 +102,8 @@ public sealed partial class CameraPanel : UserControl
             var settings = video.Effective(_host.Defaults);
             string skips = video.Skips.Count == 0 ? "no skips" : $"{video.Skips.Count} skip(s)";
             string plates = video.Plates.Count == 0 ? string.Empty : $"   {video.Plates.Count} plate(s)";
+            var labels = video.LabelSummary;
+            plates += $"   {labels.Labelled}/{labels.Parts} part(s) labelled";
             string sub = camera.SubstreamPath is null ? string.Empty
                 : $"   sub {camera.SubstreamFormat.Width}x{camera.SubstreamFormat.Height} {camera.SubstreamFormat.FrameRate} fps";
             _details.Text = (several ? $"{playlist.Count} videos   " : $"{video.Name}   ")
@@ -134,6 +139,7 @@ public sealed partial class CameraPanel : UserControl
             _scanMotion.Enabled = idle && !video.IsScanning;
             _scanMotion.Text = video.IsScanning ? $"Scanning {video.ScanProgress * 100:0}%" : "Scan motion";
             _plates.Enabled = idle;
+            _labels.Enabled = idle;
             _outage.Enabled = idle;
             _remove.Enabled = idle;
 
@@ -159,6 +165,7 @@ public sealed partial class CameraPanel : UserControl
             _timeline.SetSkipRanges(video.Skips);
             _timeline.SetMotion(video.Motion, settings.MotionThresholdPercent);
             _timeline.SetPlates(video.Plates);
+            _timeline.SetLabels(video.Vehicles, video.EmptyParts);
             _timeline.ScanProgress = video.ScanProgress;
             _timeline.PendingStart = ReferenceEquals(Entry.PendingSkipVideo, video) ? Entry.PendingSkipStart : null;
             _timeline.Position = camera.Position.TotalSeconds;
@@ -189,6 +196,13 @@ public sealed partial class CameraPanel : UserControl
 
     private async void OnPlatesClick(object? sender, EventArgs e) =>
         await DoAsync(entry => _host!.EditPlatesAsync(entry, _shown ?? entry.Video), "Plates");
+
+    private async void OnLabelsClick(object? sender, EventArgs e) =>
+        await DoAsync(entry => _host!.EditLabelsAsync(entry, _shown ?? entry.Video, null), "Labels");
+
+    /// <summary>Double-click (or the right-click menu) on a playing part of the timeline: label that part.</summary>
+    private async void OnTimelineLabelPart(object? sender, double seconds) =>
+        await DoAsync(entry => _host!.EditLabelsAsync(entry, _shown ?? entry.Video, seconds), "Labels");
 
     private void OnScanMotionClick(object? sender, EventArgs e) => Do(entry => _host!.ScanMotion(_shown ?? entry.Video), "Scan motion");
 

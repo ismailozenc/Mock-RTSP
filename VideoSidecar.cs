@@ -10,12 +10,15 @@ public sealed record SavedVideo(
     VideoSettings? Settings,
     bool FileExists,
     bool FromOldFile,
-    List<PlateMark> Plates)
+    List<PlateMark> Plates,
+    List<VehicleMark> Vehicles,
+    List<double> EmptyParts)
 {
     /// <summary>True once the video has been scanned for motion, so it is not scanned again on load.</summary>
     public bool Scanned => Motion is not null;
 
-    public static SavedVideo None => new(new List<SkipRange>(), null, null, false, false, new List<PlateMark>());
+    public static SavedVideo None => new(new List<SkipRange>(), null, null, false, false, new List<PlateMark>(),
+        new List<VehicleMark>(), new List<double>());
 }
 
 /// <summary>
@@ -26,6 +29,8 @@ public sealed record SavedVideo(
 ///   motion    how much moves, 5 times a second, from the motion scan; kept so changing the
 ///             motion settings picks new skips straight away, without scanning again
 ///   plates    ground truth: the licence plates visible in the video, and when
+///   vehicles  ground truth: the vehicles in the playing parts, coming or going, with their plates
+///   emptyParts moments in playing parts that were checked and have no vehicles
 /// Copy the file along with the video and all of this comes with it.
 /// Files from the previous version ("&lt;video file&gt;.skips.json") are read too, and replaced
 /// by the new file the first time it is saved.
@@ -73,8 +78,18 @@ public static class VideoSidecar
             var plates = (file?.Plates ?? new List<PlateEntry>())
                 .Select(p => new PlateMark(p.Time, p.Plate ?? string.Empty, p.X, p.Y, p.Width, p.Height));
 
+            var vehicles = new List<VehicleMark>();
+            foreach (var v in file?.Vehicles ?? new List<VehicleEntry>())
+            {
+                if (!VehicleLabels.TryParseDirection(v.Direction, out var direction))
+                    throw new FormatException($"'{v.Direction}' is not a direction (coming or going)");
+                vehicles.Add(new VehicleMark(v.Time, direction, v.Plate ?? string.Empty));
+            }
+
             return new SavedVideo(SkipRanges.Normalize(ranges, durationSeconds), motion, file?.Settings, true, fromOld,
-                PlateMarks.Normalize(plates, durationSeconds));
+                PlateMarks.Normalize(plates, durationSeconds),
+                VehicleLabels.Normalize(vehicles, durationSeconds),
+                VehicleLabels.NormalizeEmpty(file?.EmptyParts ?? new List<double>(), durationSeconds));
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
@@ -88,12 +103,14 @@ public static class VideoSidecar
     /// the previous version is removed once its content is in the new file.
     /// </summary>
     public static void Save(string videoPath, IReadOnlyList<SkipRange> ranges, MotionProfile? motion, VideoSettings? settings,
-        IReadOnlyList<PlateMark>? plates = null)
+        IReadOnlyList<PlateMark>? plates = null, IReadOnlyList<VehicleMark>? vehicles = null, IReadOnlyList<double>? emptyParts = null)
     {
         string path = PathFor(videoPath);
         plates ??= Array.Empty<PlateMark>();
+        vehicles ??= Array.Empty<VehicleMark>();
+        emptyParts ??= Array.Empty<double>();
 
-        if (ranges.Count == 0 && motion is null && settings is null && plates.Count == 0)
+        if (ranges.Count == 0 && motion is null && settings is null && plates.Count == 0 && vehicles.Count == 0 && emptyParts.Count == 0)
         {
             if (File.Exists(path))
                 File.Delete(path);
@@ -114,6 +131,13 @@ public static class VideoSidecar
                     Width = p.Width,
                     Height = p.Height
                 }).ToList(),
+                Vehicles = vehicles.Count == 0 ? null : vehicles.Select(v => new VehicleEntry
+                {
+                    Time = Math.Round(v.Time, 3),
+                    Direction = v.DirectionText,
+                    Plate = v.Plate.Length == 0 ? null : v.Plate
+                }).ToList(),
+                EmptyParts = emptyParts.Count == 0 ? null : emptyParts.Select(t => Math.Round(t, 3)).ToList(),
                 Motion = motion is null ? null : new MotionEntry
                 {
                     IntervalSeconds = motion.IntervalSeconds,
@@ -142,6 +166,16 @@ public static class VideoSidecar
         public List<Entry> Skips { get; set; } = new();
         public MotionEntry? Motion { get; set; }
         public List<PlateEntry>? Plates { get; set; }
+        public List<VehicleEntry>? Vehicles { get; set; }
+        public List<double>? EmptyParts { get; set; }
+    }
+
+    /// <summary>A ground-truth vehicle: when, "coming" or "going", and its plate (left out when not given).</summary>
+    private sealed class VehicleEntry
+    {
+        public double Time { get; set; }
+        public string? Direction { get; set; }
+        public string? Plate { get; set; }
     }
 
     /// <summary>A ground-truth plate; the region (fractions of the picture) is left out when not given.</summary>

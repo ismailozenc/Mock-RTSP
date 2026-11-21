@@ -17,6 +17,7 @@ public sealed partial class CameraPanel
     private Button _settings = null!;
     private Button _scanMotion = null!;
     private Button _plates = null!;
+    private Button _labels = null!;
     private Label _stats = null!;
     private Label _lblOutage = null!;
     private NumericUpDown _outageSeconds = null!;
@@ -62,6 +63,7 @@ public sealed partial class CameraPanel
         _settings = new Button();
         _scanMotion = new Button();
         _plates = new Button();
+        _labels = new Button();
         _stats = new Label();
         _lblOutage = new Label();
         _outageSeconds = new NumericUpDown();
@@ -120,6 +122,8 @@ public sealed partial class CameraPanel
         _scanMotion.Text = "Scan motion";
         _plates.Size = new Size(70, 28);
         _plates.Text = "Plates...";
+        _labels.Size = new Size(70, 28);
+        _labels.Text = "Labels...";
 
         _stats.AutoSize = true;
         _stats.Font = new Font("Consolas", 8.5F);
@@ -147,7 +151,7 @@ public sealed partial class CameraPanel
         _header.Dock = DockStyle.Fill;
         _header.Margin = new Padding(0);
         _header.WrapContents = true;
-        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _plates, _lblOutage, _outageSeconds, _outage, _remove });
+        _header.Controls.AddRange(new Control[] { _state, _path, _details, _startStop, _openVlc, _playlist, _settings, _scanMotion, _plates, _labels, _lblOutage, _outageSeconds, _outage, _remove });
 
         // ================= Player: video, rewind, pause, back, forward, next, speed, skips, zoom =================
         _video.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -200,7 +204,7 @@ public sealed partial class CameraPanel
 
         // ================= Timeline: hover to preview, click to jump, red = skipped =================
         _timeline.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        _timeline.Height = 86;
+        _timeline.Height = 108;
         _timeline.Margin = new Padding(0, 4, 0, 0);
 
         // ================= Layout =================
@@ -225,6 +229,7 @@ public sealed partial class CameraPanel
         _settings.Click += new EventHandler(OnSettingsClick);
         _scanMotion.Click += new EventHandler(OnScanMotionClick);
         _plates.Click += new EventHandler(OnPlatesClick);
+        _labels.Click += new EventHandler(OnLabelsClick);
         _outage.Click += new EventHandler(OnOutageClick);
         _remove.Click += new EventHandler(OnRemoveClick);
         _back10.Click += new EventHandler(OnBack10Click);
@@ -238,6 +243,7 @@ public sealed partial class CameraPanel
         _zoomFit.Click += new EventHandler(OnZoomFitClick);
         _timeline.SeekRequested += new EventHandler<double>(OnTimelineSeek);
         _timeline.SkipRangesChanged += new EventHandler(OnTimelineSkipsChanged);
+        _timeline.LabelPartRequested += new EventHandler<double>(OnTimelineLabelPart);
 
         // ================= Panel =================
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)

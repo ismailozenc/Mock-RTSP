@@ -262,6 +262,30 @@ public sealed partial class MainForm : Form, ICameraHost
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// One video's vehicle labels per playing part, saved next to it. "Play this part" in the dialog
+    /// moves the camera when it is playing this video.
+    /// </summary>
+    public Task EditLabelsAsync(CameraEntry entry, VideoFile video, double? showAt)
+    {
+        bool playing = ReferenceEquals(entry.Video, video);
+        Func<double>? playhead = playing ? () => entry.Camera.Position.TotalSeconds : null;
+        Action<double>? seek = playing
+            ? seconds =>
+            {
+                entry.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
+                Log($"'{entry.StreamPath}': playing the part from {PlateMarks.FormatTime(seconds)} for labelling.");
+            }
+            : null;
+
+        using var dialog = new LabelsDialog(video.Name, video.Skips, video.Duration, video.Vehicles, video.EmptyParts,
+            playhead, showAt, seek);
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            video.SetLabels(dialog.Vehicles, dialog.EmptyParts);
+
+        return Task.CompletedTask;
+    }
+
     private void OnScoreClick(object? sender, EventArgs e) => Safe(() =>
     {
         string today = _groundTruth.TodayPath;
@@ -533,9 +557,10 @@ public sealed partial class MainForm : Form, ICameraHost
         item.SubItems[2].Text = $"{info.Width}x{info.Height} {info.FrameRate:0.##} fps";
 
         if (_videos.TryGetValue(file, out var video))
-            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count);
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count, video.LabelSummary);
         else
-            item.SubItems[3].Text = saved is null ? "?" : DescribeSaved(saved.Skips, saved.Scanned, saved.Settings is not null, saved.Plates.Count);
+            item.SubItems[3].Text = saved is null ? "?" : DescribeSaved(saved.Skips, saved.Scanned, saved.Settings is not null, saved.Plates.Count,
+                VehicleLabels.Summarize(saved.Skips, saved.Vehicles, saved.EmptyParts, info.DurationSeconds));
     }
 
     /// <summary>Refreshes a video's row: its skips and the cameras playing it.</summary>
@@ -546,7 +571,7 @@ public sealed partial class MainForm : Form, ICameraHost
             return;
 
         if (_videos.TryGetValue(file, out var video))
-            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count);
+            item.SubItems[3].Text = DescribeSaved(video.Skips, video.Motion is not null, video.HasOwnSettings, video.Plates.Count, video.LabelSummary);
 
         UpdateCameraColumn(item);
     }
@@ -567,7 +592,7 @@ public sealed partial class MainForm : Form, ICameraHost
             .FirstOrDefault(i => string.Equals(Path.GetFullPath((string)i.Tag!), full, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings, int plates)
+    private static string DescribeSaved(IReadOnlyList<SkipRange> skips, bool scanned, bool ownSettings, int plates, LabelSummary labels)
     {
         string text = skips.Count > 0
             ? $"{skips.Count} skip(s), {FormatTime(TimeSpan.FromSeconds(skips.Sum(r => r.Length)))} cut"
@@ -575,6 +600,9 @@ public sealed partial class MainForm : Form, ICameraHost
 
         if (plates > 0)
             text += $", {plates} plate(s)";
+
+        if (labels.Parts > 0)
+            text += $", {labels.Labelled}/{labels.Parts} part(s) labelled";
 
         return ownSettings ? text + ", own settings" : text;
     }

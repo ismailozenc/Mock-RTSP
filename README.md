@@ -8,9 +8,11 @@ Beyond looping a file, each camera behaves like a controllable camera:
 - skip ranges, picked automatically from a motion scan, so only the parts with movement are streamed
 - a substream (`.../102` next to `.../101`), like a real camera
 
+For vehicle detection testing, each video's playing parts can be labelled with the vehicles in them, coming or going, with their plates, and the timeline shows how many parts there are and how many are labelled.
+
 For ALPR testing, each video can carry a ground-truth list of the plates in it. The app logs the moment each plate is actually streamed and scores your ALPR results against that log (hit rate, misses, latency). Each camera shows live stats (frame rate, bitrate, viewers). The whole setup can be saved as a project and reopened.
 
-Contents: [Requirements](#requirements) · [Using the app](#using-the-app) · [Ground truth for ALPR testing](#ground-truth-for-alpr-testing) · [For developers: how the code works](#for-developers-how-the-code-works) · [File reference](#file-reference) · [Changes timeline](#changes-timeline) · [Where we left off](#where-we-left-off)
+Contents: [Requirements](#requirements) · [Using the app](#using-the-app) · [Vehicle labels per playing part](#vehicle-labels-per-playing-part) · [Ground truth for ALPR testing](#ground-truth-for-alpr-testing) · [For developers: how the code works](#for-developers-how-the-code-works) · [File reference](#file-reference) · [Changes timeline](#changes-timeline) · [Where we left off](#where-we-left-off)
 
 ## Requirements
 
@@ -33,10 +35,10 @@ For development, put the `mediamtx` and `ffmpeg` folders in the project folder. 
 2. Choose your **Video folder** (Browse, or pick a recent one). The list shows the playable videos in it with their length, picture size, skips and which cameras use them; other files are left out.
 3. **Double-click a video** (or select it and click **Add camera**) to add it as a camera. Select several videos (Ctrl or Shift + click) to add one camera that plays them in turn. The stream path is filled in for you (Streaming/Channels/101, 201, 301 and so on) and can be changed first. The same video can be used by more than one camera.
 4. Every camera gets its own panel on the right, with everything for that camera, so nothing needs selecting first:
-   - **Start/Stop**, **Open in VLC**, **Playlist...**, **Video settings...**, **Scan motion**, **Plates...**, **Outage** with **Simulate**, and **Remove**.
+   - **Start/Stop**, **Open in VLC**, **Playlist...**, **Video settings...**, **Scan motion**, **Plates...**, **Labels...**, **Outage** with **Simulate**, and **Remove**.
    - Live stats at the end of the player row: frames per second actually sent, bitrate and viewers, for the main stream and the substream.
    - **Rewind** (back to the start of the video; pressed again at the start, to the video before), **« 10 s**, **Pause/Play**, **10 s »**, **Speed** (0.25x to 4x), **Skip start**/**Skip end**, and **-**, **+**, **Fit** to zoom its timeline. A camera with several videos also has a list to pick the video and **Next**.
-   - Its own **timeline** of the video playing now: hover for a preview frame, click or drag to jump, drag the white edges of a skipped part (dark red), Shift + drag to add one, right-click to delete. Ctrl + wheel zooms. The graph shows how much of the picture moves: faint below the threshold (dashed line), solid green above it, and as a red hatched grid in skipped parts, so you can see the movement that is cut. Under it a strip shows what plays (green) and what is skipped (red).
+   - Its own **timeline** of the video playing now: hover for a preview frame, click or drag to jump, drag the white edges of a skipped part (dark red), Shift + drag to add one, right-click to delete. Ctrl + wheel zooms. The graph shows how much of the picture moves: faint below the threshold (dashed line), solid green above it, and as a red hatched grid in skipped parts, so you can see the movement that is cut. Under it a strip shows what plays (green) and what is skipped (red), and under that the labels strip: one block per playing part with its vehicles (see [Vehicle labels per playing part](#vehicle-labels-per-playing-part)). The top right of the timeline shows how many parts there are and how many are labelled.
    Viewers stay connected through pause, seek and speed changes.
 
 Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Streaming/Channels/101`, or the substream `rtsp://127.0.0.1:8554/Streaming/Channels/102`.
@@ -55,6 +57,20 @@ Each camera panel shows, about once a second:
 - **viewers**: how many are watching, separately for the main stream and the substream
 
 The numbers come from MediaMTX's control API, which the app turns on for this computer only, on a free port.
+
+## Vehicle labels per playing part
+
+The motion scan splits a video into **playing parts**: the stretches between skips, where something moves (the green parts of the play strip). **Labels...** on a camera, or a double-click on a part in the timeline's labels strip (or right-click > **Label part N...**), opens the labels of the video it is playing:
+
+- **The list of playing parts**, with their start, end, length and vehicles. Parts still to label are orange. The line at the top counts them: "12 playing parts, 7 labelled (9 vehicles: 5 coming, 4 going), 5 to label".
+- **The selected part's vehicles**, as many as it has: **time**, **direction** (coming towards the camera, or going away) and **plate** (optional; leave it empty when it cannot be read). **Add vehicle** puts one at the camera's position when it is in this part, otherwise in the middle of the part. A part with movement but no vehicle (a pedestrian, a door) gets **No vehicles in this part**, so it counts as labelled too.
+- **Play this part** jumps the camera to the start of the part, to watch it (for example in VLC) while labelling. It works while the camera plays this video.
+- **Next to label** and **Previous to label** go through the parts that are left.
+- **Export CSV...** writes one line per vehicle: `part,part_start,part_end,time,direction,plate` (a part with no vehicles gets one line with direction `none`).
+
+On the timeline, the labels strip under the play strip shows each playing part: a chip per vehicle with its plate (or its direction when it has none), green for coming and orange for going; the counts when the chips do not fit; "none" for a part with no vehicles; and an orange hatch with "?" for a part still to label. Hovering shows the part's labels in the preview caption. The camera panel and the video list show "7/12 part(s) labelled".
+
+Each vehicle is kept with its time, so its labels stay with it when the skips change: they belong to whichever playing part contains that time. Labels that end up in a skipped part are counted in the dialog, and **Delete labels in skipped parts** removes them. Labels are saved with the video in its `.mockrtsp.json`.
 
 ## Ground truth for ALPR testing
 
@@ -114,7 +130,8 @@ Everything about a video is kept in a file next to it, `<video file>.mockrtsp.js
 - its own settings, if it has any,
 - its skip ranges,
 - its motion data: how much of the picture moves, 5 times a second, from the motion scan,
-- its ground-truth plates.
+- its ground-truth plates,
+- its vehicle labels: the vehicles in its playing parts (time, coming or going, plate), and the parts checked as having none.
 
 The preview pictures for the timeline are kept next to it too, in `<video file>.mockrtsp.previews`: small JPEG pictures (a few KB each) with a table of where each one is, so they load at once and any moment can be shown straight away. They are made again if the video file changes. Deleting the file is safe; it is made again the next time.
 
@@ -200,7 +217,7 @@ PlatesDialog (ground truth per video) · ScoreDialog + PlateScorer (ALPR results
 |---|---|---|---|
 | `options.json` | `%APPDATA%\MockRtsp\` | OptionsStore | Defaults for videos, server settings (logins in plain text), last folder, recent folders, last project, reopen-at-startup flag |
 | `errors.log` | `%LOCALAPPDATA%\MockRtsp\` | ErrorReporter | Unexpected exceptions with context |
-| `<video>.mockrtsp.json` | next to each video | VideoSidecar | Video's own settings (or none), skip ranges, motion data (base64), ground-truth plates (time, plate, optional region). Atomic save. Deleted when there is nothing to keep. Replaces the older `<video>.skips.json`, which is read and deleted on the first save |
+| `<video>.mockrtsp.json` | next to each video | VideoSidecar | Video's own settings (or none), skip ranges, motion data (base64), ground-truth plates (time, plate, optional region), vehicle labels (`vehicles`: time, `coming`/`going`, optional plate) and `emptyParts` (moments in parts checked as having no vehicles). Atomic save. Deleted when there is nothing to keep. Replaces the older `<video>.skips.json`, which is read and deleted on the first save |
 | `<video>.mockrtsp.previews` | next to each video | ThumbnailStrip | Binary: `"MRTPREV1"`, video size and last-write ticks, width, height, interval, count, one int32 length per picture, then the JPEGs. Rebuilt if the video changed or the file is damaged |
 | `*.mockrtsp-project` | where the user saves it | ProjectFile | JSON: port, StartServer, Settings (StreamOptions without the remembered fields), VideoFolder, Cameras[] (StreamPath, Videos, Running, Paused, Speed, Video, PositionSeconds). Paths are relative to the project folder when inside it |
 | `ground-truth-YYYY-MM-DD.csv` | `Documents\MockRtsp\ground-truth\` or the folder in Settings > Server | GroundTruthLog | One line per plate streamed. Columns: utc_time, local_time, camera, substream, video, video_time, plate, x, y, width, height, stream_x, stream_y, stream_width, stream_height |
@@ -274,13 +291,17 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `GetJpeg(i)` gives random access to any picture.
 - **`VideoFile.cs`**: one open video, shared by all cameras that play it: path, `Info`, `Item` (as a PlaylistItem), `Skips`, `Motion`, `Previews`, own settings, scan state.
   - `Load(defaults)` reads the sidecar, starts an automatic scan the first time (when `AutoScanMotion` is on), and starts the previews.
-  - `SetSkips`, `SetPlates`, `SetOwnSettings`, `ApplyMotionSettings` and `SkipsMatchScan` (the setters save straight away).
+  - `SetSkips`, `SetPlates`, `SetLabels`, `SetOwnSettings`, `ApplyMotionSettings` and `SkipsMatchScan` (the setters save straight away).
+  - `Vehicles`, `EmptyParts`, `PlayingParts` and `LabelSummary` for the vehicle labels.
   - `StartScan(automatic)`; `Poll(defaults)` applies a finished scan (an automatic scan keeps skips the user made meanwhile).
   - Events: `Changed` (MainForm pushes skips to cameras) and `Message` (log lines).
 - **`PlateMarks.cs`**: ground-truth plates.
   - `record PlateMark(Time, Plate, X?, Y?, Width?, Height?)` with the region as fractions of the video's picture; `Normalize(plate text)` keeps letters and digits in upper case for comparing.
   - `PlateMarks`: `Normalize(list)`, `Check` (time inside the video, all-or-none region inside the picture), `FormatTime`/`TryParseTime` (83.4 or 1:23.4), and `ToCsv`/`FromCsv` (`time,plate,x,y,width,height`; errors name the line).
   - `Csv`: escaping and a reader that handles quoted fields.
+- **`VehicleLabels.cs`**: vehicle labels per playing part.
+  - `enum VehicleDirection` (Coming, Going); `record VehicleMark(Time, Direction, Plate)`; `record PlayingPart(Number, Start, End)` with `Contains` (end exclusive, except the end of the video); `record PartLabels(Part, Vehicles, MarkedEmpty)` with `IsLabelled`; `record LabelSummary(Parts, Labelled, Vehicles, Coming, Going, Outside)` with `ToLabel` and `Describe`.
+  - `VehicleLabels`: `PlayingParts(skips, duration)` (the video minus its skips; the whole video when there are none, or when they would leave nothing to play), `Group`, `CountOutside`, `Summarize`, `Describe(part)`, `Normalize`, `NormalizeEmpty`, `TryParseDirection` and `ToCsv`.
 - **`GroundTruthLog.cs`**: `record StreamedPlate` (one log line) and `GroundTruthLog`.
   - `Write` appends thread-safely to the day's file and adds the header to a new file.
   - `From(camera, substream, PlateStreamedEventArgs)` builds a line; `StreamRegion` maps a region into main-stream pixels, the same way `ScaleFilter` letterboxes.
@@ -347,6 +368,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - Ruler; a bar with skipped parts as dark red areas with draggable white edges.
   - The motion graph: faint below the threshold, solid green above, a red hatched grid where skipped. It is scaled to the video's busiest moment, with a dashed threshold line.
   - Plate flags (`SetPlates`): yellow with the plate text where it fits, grey inside a skipped part; the hover caption lists plates near the mouse.
+  - The labels strip under the play strip (`SetLabels`): a block per playing part with a chip per vehicle (green coming, orange going), counts or dots when they do not fit, "none", or an orange hatch with "?" to label. The ruler's top right shows the parts and how many are labelled when no scan or preview progress is shown. `LabelPartRequested` is raised by a double-click on the strip and by the right-click menu's "Label part N...".
   - A green/red play strip; the playhead, the hover line, and an orange pending-skip line.
   - A horizontal scrollbar with zoom (Ctrl + wheel, ZoomIn/Out/ToFit) and auto-follow of the playhead.
   - Hover shows `PreviewPopup` with the JPEG decoded on demand (at most 150 kept).
@@ -356,6 +378,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `Result` holds the edited copy; `CommitTyped` fixes NumericUpDown typing.
 - **`PlaylistDialog.cs` / `PlaylistDialog.Designer.cs`**: two lists (videos in the folder, and the playlist) with Add, Remove, Move up/down and Other file.... `Files` returns the chosen order.
 - **`PlatesDialog.cs` / `PlatesDialog.Designer.cs`**: a DataGridView of time, plate, x, y, width and height for one video, with Add at playhead, Remove, Import CSV... and Export CSV.... `Plates` returns the checked, sorted list; errors name the row.
+- **`LabelsDialog.cs` / `LabelsDialog.Designer.cs`**: the labels of one video. Left, a ListView of the playing parts (unlabelled ones orange) under a summary line; right, a DataGridView of the selected part's vehicles (time, direction combo, plate) with Add vehicle, Remove, "No vehicles in this part" and Play this part (a seek callback, null when the camera plays another video). Previous/Next to label, Delete labels in skipped parts, Export CSV. Edits are kept per part as the selection moves (`CommitCurrent` checks every row is a time inside the part); `Vehicles` and `EmptyParts` return the result after OK.
 - **`ScoreDialog.cs` / `ScoreDialog.Designer.cs`**: picks the ground-truth log and the results file, sets the before/after window, shows `PlateScorer.Summary`, and saves the CSV report.
 - **`MainForm.resx`, `OptionsDialog.resx`**: resource files added by the Visual Studio designer. Nothing in them is used by the code.
 
@@ -396,8 +419,13 @@ Newest last. Commit hashes are on `main`.
 - Score ALPR results: hit rate, one-character-off, misses, unmatched reads, latency statistics, per camera, CSV report.
 - Live stats per camera: measured fps, bitrate and viewers for the main stream and substream, from MediaMTX's API (now on, on a free local port, for this computer only).
 
+**2026-11-21: vehicle labels per playing part**
+- Labels... on each camera and the timeline's labels strip: per playing part, the vehicles in it (time, coming or going, optional plate) or "no vehicles"; counts of parts and labelled parts on the timeline, the camera panel and the video list; Play this part, Next to label, Export CSV. Saved in `.mockrtsp.json`.
+- Checked by compiling against the .NET 8 Windows Forms reference assemblies on Linux (0 errors, 0 warnings), a console test of the labels logic and the sidecar round trip, and the Timeline and LabelsDialog driven under Mono WinForms (net48) with screenshots from Xvfb. Not yet run on Windows.
+
 ## Where we left off
 
+- **Vehicle labels** (Labels... dialog, labels strip) are not yet run on Windows; check the dialog's layout and the strip's text at 100 % and higher scaling. Next step: score a vehicle detector's results (time, direction, plate) against the labels, like Score ALPR results does for plates.
 - **Not yet confirmed on Windows**: the latest UI (playlist controls, Playlist dialog, project buttons, the timeline drawing, the Plates and Score dialogs, the stats text) was checked under Mono only. Things to look at on Windows:
   - whether the player row wraps on narrower windows
   - the project open/save file dialogs

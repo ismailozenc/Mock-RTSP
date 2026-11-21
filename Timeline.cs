@@ -9,7 +9,8 @@ namespace MockRtsp;
 ///   Click or drag           jump to that moment (SeekRequested, raised on release)
 ///   Drag a red edge         move where a skip range starts or ends (SkipRangesChanged)
 ///   Shift + drag            draw a new skip range
-///   Right-click             delete a skip range, add one, or clear them all
+///   Right-click             delete a skip range, add one, or clear them all; label a playing part
+///   Double-click the labels strip (under the play strip): label that playing part
 ///   Mouse wheel             scroll; Ctrl + wheel zooms around the mouse
 /// While playing, it scrolls by itself to keep the playhead in view, unless the user has
 /// just scrolled.
@@ -26,6 +27,8 @@ public sealed class Timeline : Control
     private readonly Dictionary<int, Bitmap> _bitmaps = new();
     private readonly List<SkipRange> _skips = new();
     private readonly List<PlateMark> _plates = new();
+    private readonly List<VehicleMark> _vehicles = new();
+    private readonly List<double> _emptyParts = new();
     private ThumbnailStrip? _strip;
     private MotionProfile? _motion;
     private double _motionThreshold = 0.3;
@@ -50,6 +53,9 @@ public sealed class Timeline : Control
 
     /// <summary>Raised after the user adds, moves or deletes skip ranges. Read SkipRanges for the new list.</summary>
     public event EventHandler? SkipRangesChanged;
+
+    /// <summary>Raised when the user asks to label a playing part, with a moment inside it.</summary>
+    public event EventHandler<double>? LabelPartRequested;
 
     public Timeline()
     {
@@ -148,6 +154,23 @@ public sealed class Timeline : Control
         Invalidate();
     }
 
+    /// <summary>
+    /// Vehicle labels, shown in the labels strip under the play strip: per playing part, a chip per
+    /// vehicle (green coming, orange going) with its plate, "none" for a part checked as having no
+    /// vehicles, and an orange hatch with "?" for a part still to label.
+    /// </summary>
+    public void SetLabels(IReadOnlyList<VehicleMark> vehicles, IReadOnlyList<double> emptyParts)
+    {
+        if (_vehicles.SequenceEqual(vehicles) && _emptyParts.SequenceEqual(emptyParts))
+            return;
+
+        _vehicles.Clear();
+        _vehicles.AddRange(vehicles);
+        _emptyParts.Clear();
+        _emptyParts.AddRange(emptyParts);
+        Invalidate();
+    }
+
     /// <summary>Where a skip range started with "Skip start" begins, shown as an orange line. Null for none.</summary>
     public double? PendingStart
     {
@@ -228,12 +251,22 @@ public sealed class Timeline : Control
     /// <summary>Height of the green/red strip along the bottom: what plays and what is skipped.</summary>
     private const int PlayStripHeight = 9;
 
+    /// <summary>Height of the labels strip under the play strip: one block per playing part.</summary>
+    private int LabelStripHeight => Font.Height + 6;
+
     /// <summary>The bar with the skip blocks and the motion graph, above the play strip.</summary>
     private Rectangle BarArea =>
-        new(0, RulerHeight, ViewWidth, Math.Max(1, ClientSize.Height - RulerHeight - _scroll.Height - PlayStripHeight));
+        new(0, RulerHeight, ViewWidth, Math.Max(1, ClientSize.Height - RulerHeight - _scroll.Height - PlayStripHeight - LabelStripHeight));
 
     private Rectangle PlayStripArea =>
         new(0, RulerHeight + BarArea.Height, ViewWidth, PlayStripHeight);
+
+    private Rectangle LabelStripArea =>
+        new(0, RulerHeight + BarArea.Height + PlayStripHeight, ViewWidth, LabelStripHeight);
+
+    /// <summary>The playing parts now, with their labels.</summary>
+    private List<PartLabels> LabelGroups() =>
+        VehicleLabels.Group(VehicleLabels.PlayingParts(_skips, _duration), _vehicles, _emptyParts, _duration);
 
     private int TimeToX(double seconds) => (int)Math.Round((seconds - _scrollSeconds) * _pixelsPerSecond);
 
@@ -323,6 +356,7 @@ public sealed class Timeline : Control
             DrawSkipEdges(g);
             DrawPlates(g);
             DrawPlayStrip(g);
+            DrawLabels(g);
             DrawRuler(g);
             DrawStatus(g);
 
@@ -429,6 +463,92 @@ public sealed class Timeline : Control
                 g.FillRectangle(skipped, x1, rect.Top, x2 - x1, rect.Height);
             else if (x2 == x1 && x1 < ViewWidth)
                 g.FillRectangle(skipped, x1, rect.Top, 1, rect.Height);      // too short for a pixel at this zoom, still shown
+        }
+    }
+
+    /// <summary>
+    /// Under the play strip: a block per playing part with its labels. A chip per vehicle, green
+    /// for coming and orange for going, with the plate (or the direction when there is none);
+    /// counts when the chips do not fit; "none" for a part checked as having no vehicles; and an
+    /// orange hatch with "?" for a part still to label.
+    /// </summary>
+    private void DrawLabels(Graphics g)
+    {
+        var strip = LabelStripArea;
+        using (var back = new SolidBrush(Color.FromArgb(24, 24, 27)))
+            g.FillRectangle(back, 0, strip.Top, ViewWidth, strip.Height);
+
+        using var small = new Font(Font.FontFamily, (float)Math.Max(6.5, Font.Size - 1.5));
+        using var labelled = new SolidBrush(Color.FromArgb(44, 54, 72));
+        using var empty = new SolidBrush(Color.FromArgb(52, 52, 56));
+        using var todo = new HatchBrush(HatchStyle.BackwardDiagonal, Color.FromArgb(150, 230, 140, 0), Color.FromArgb(58, 44, 22));
+        using var coming = new SolidBrush(Color.FromArgb(46, 160, 67));
+        using var going = new SolidBrush(Color.FromArgb(230, 126, 20));
+        using var edge = new Pen(Color.FromArgb(90, 90, 98));
+
+        foreach (var group in LabelGroups())
+        {
+            int x1 = TimeToX(group.Part.Start);
+            int x2 = TimeToX(group.Part.End);
+            if (x2 < 0 || x1 > ViewWidth)
+                continue;
+
+            var rect = new Rectangle(x1 + 1, strip.Top + 1, Math.Max(1, x2 - x1 - 1), strip.Height - 2);
+            g.FillRectangle(group.Vehicles.Count > 0 ? labelled : group.MarkedEmpty ? empty : todo, rect);
+            g.DrawLine(edge, x1, strip.Top, x1, strip.Bottom - 1);
+
+            var inner = Rectangle.Intersect(rect, new Rectangle(0, rect.Top, ViewWidth, rect.Height));
+            if (inner.Width < 8)
+                continue;
+
+            if (!group.IsLabelled || (group.MarkedEmpty && group.Vehicles.Count == 0))
+            {
+                string text = group.IsLabelled ? "none" : $"#{group.Part.Number} ?";
+                if (TextRenderer.MeasureText(text, small).Width + 4 > inner.Width)
+                    text = group.IsLabelled ? string.Empty : "?";
+                TextRenderer.DrawText(g, text, small, inner, group.IsLabelled ? Color.Gray : Color.Gold,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                continue;
+            }
+
+            // A chip per vehicle while they fit; otherwise the counts; otherwise a dot per vehicle.
+            var chips = group.Vehicles.Select(v => (Vehicle: v, Text: v.Plate.Length > 0 ? v.Plate : v.DirectionText)).ToList();
+            int needed = chips.Sum(c => TextRenderer.MeasureText(c.Text, small).Width + 8) + 2;
+            if (needed <= inner.Width)
+            {
+                int x = inner.Left + 2;
+                foreach (var (vehicle, text) in chips)
+                {
+                    int w = TextRenderer.MeasureText(text, small).Width + 6;
+                    var chip = new Rectangle(x, inner.Top + 2, w, inner.Height - 4);
+                    g.FillRectangle(vehicle.Direction == VehicleDirection.Coming ? coming : going, chip);
+                    TextRenderer.DrawText(g, text, small, chip, Color.Black,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                    x += w + 2;
+                }
+
+                continue;
+            }
+
+            int nComing = group.Vehicles.Count(v => v.Direction == VehicleDirection.Coming);
+            int nGoing = group.Vehicles.Count - nComing;
+            string counts = $"{nComing} coming, {nGoing} going";
+            if (TextRenderer.MeasureText(counts, small).Width + 4 <= inner.Width)
+            {
+                TextRenderer.DrawText(g, counts, small, inner, Color.Gainsboro,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                continue;
+            }
+
+            int dot = Math.Min(6, inner.Height - 6);
+            int dx = inner.Left + 2;
+            foreach (var vehicle in group.Vehicles)
+            {
+                if (dx + dot > inner.Right)
+                    break;
+                g.FillRectangle(vehicle.Direction == VehicleDirection.Coming ? coming : going, dx, inner.Top + (inner.Height - dot) / 2, dot, dot);
+                dx += dot + 2;
+            }
         }
     }
 
@@ -580,15 +700,22 @@ public sealed class Timeline : Control
             : _strip is { IsComplete: false, Error: null }
                 ? $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
                 : null;
+        var color = Color.Khaki;
 
+        // Otherwise: how many playing parts there are and how many are labelled.
         if (text is null)
-            return;
+        {
+            var summary = VehicleLabels.Summarize(_skips, _vehicles, _emptyParts, _duration);
+            text = $"{summary.Parts} part{(summary.Parts == 1 ? "" : "s")}, {summary.Labelled} labelled"
+                   + (summary.Vehicles > 0 ? $", {summary.Vehicles} vehicle{(summary.Vehicles == 1 ? "" : "s")}" : string.Empty);
+            color = summary.ToLabel > 0 ? Color.FromArgb(240, 170, 60) : Color.FromArgb(120, 210, 120);
+        }
 
         var size = TextRenderer.MeasureText(text, Font);
         var box = new Rectangle(ViewWidth - size.Width - 10, 1, size.Width + 8, RulerHeight - 2);
         using (var back = new SolidBrush(Color.FromArgb(200, 24, 24, 27)))
             g.FillRectangle(back, box);
-        TextRenderer.DrawText(g, text, Font, box, Color.Khaki, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(g, text, Font, box, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
 
     /// <summary>A vertical line through the timeline, with an optional time label.</summary>
@@ -634,6 +761,9 @@ public sealed class Timeline : Control
         var plates = _plates.Where(p => Math.Abs(p.Time - seconds) <= near).Select(p => p.Plate).ToList();
         if (plates.Count > 0)
             caption += "  plate " + string.Join(", ", plates);
+
+        if (index < 0 && LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
+            caption += $"  part {group.Part.Number}: {VehicleLabels.Describe(group)}";
 
         Bitmap? image = BitmapFor(seconds);
         string? note = image is not null ? null
@@ -850,6 +980,13 @@ public sealed class Timeline : Control
         int index = RangeAt(seconds);
         var menu = new ContextMenuStrip();
 
+        if (LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
+        {
+            menu.Items.Add($"Label part {group.Part.Number} ({VehicleLabels.Describe(group)})...", null,
+                (_, _) => LabelPartRequested?.Invoke(this, seconds));
+            menu.Items.Add(new ToolStripSeparator());
+        }
+
         if (index >= 0)
         {
             var range = _skips[index];
@@ -876,6 +1013,18 @@ public sealed class Timeline : Control
         _skips.AddRange(normalized);
         Invalidate();
         SkipRangesChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+
+        if (e.Button == MouseButtons.Left && _duration > 0 && LabelStripArea.Contains(e.Location))
+        {
+            double seconds = XToTime(e.X);
+            if (LabelGroups().Any(gr => gr.Part.Contains(seconds, _duration)))
+                LabelPartRequested?.Invoke(this, seconds);
+        }
     }
 
     protected override void OnMouseLeave(EventArgs e)

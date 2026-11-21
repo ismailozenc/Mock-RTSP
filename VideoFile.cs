@@ -12,6 +12,8 @@ public sealed class VideoFile : IDisposable
     private VideoSettings? _ownSettings;
     private List<SkipRange> _skips = new();
     private List<PlateMark> _plates = new();
+    private List<VehicleMark> _vehicles = new();
+    private List<double> _emptyParts = new();
     private MotionScan? _scan;
     private bool _scanIsAutomatic;
 
@@ -38,6 +40,18 @@ public sealed class VideoFile : IDisposable
 
     /// <summary>Ground truth: the licence plates visible in the video, and when. Saved next to it.</summary>
     public IReadOnlyList<PlateMark> Plates => _plates;
+
+    /// <summary>Ground truth for vehicle detection: the vehicles in the playing parts, coming or going, with plates.</summary>
+    public IReadOnlyList<VehicleMark> Vehicles => _vehicles;
+
+    /// <summary>Moments in playing parts that were checked and have no vehicles, so those parts count as labelled.</summary>
+    public IReadOnlyList<double> EmptyParts => _emptyParts;
+
+    /// <summary>The parts of the video that play now: between the skips.</summary>
+    public List<PlayingPart> PlayingParts => VehicleLabels.PlayingParts(_skips, Duration);
+
+    /// <summary>How many playing parts there are, how many are labelled, and the vehicles in them.</summary>
+    public LabelSummary LabelSummary => VehicleLabels.Summarize(_skips, _vehicles, _emptyParts, Duration);
 
     /// <summary>Movement over time, from the motion scan. Null until scanned.</summary>
     public MotionProfile? Motion { get; private set; }
@@ -79,6 +93,8 @@ public sealed class VideoFile : IDisposable
             Motion = saved.Motion;
             _ownSettings = saved.Settings;
             _plates = saved.Plates;
+            _vehicles = saved.Vehicles;
+            _emptyParts = saved.EmptyParts;
 
             if (saved.FileExists)
             {
@@ -86,6 +102,7 @@ public sealed class VideoFile : IDisposable
                 if (saved.Settings is not null) parts.Add("its own settings");
                 if (saved.Scanned) parts.Add("motion data");
                 if (saved.Plates.Count > 0) parts.Add($"{saved.Plates.Count} plate(s)");
+                if (saved.Vehicles.Count > 0 || saved.EmptyParts.Count > 0) parts.Add(LabelSummary.Describe());
                 Say($"{Name}: loaded {string.Join(", ", parts)}"
                     + (saved.FromOldFile ? $" from {System.IO.Path.GetFileName(VideoSidecar.OldPathFor(Path))} (moved to {System.IO.Path.GetFileName(VideoSidecar.PathFor(Path))} on the next change)." : "."));
             }
@@ -149,6 +166,20 @@ public sealed class VideoFile : IDisposable
 
         if (Save())
             Say(_plates.Count == 0 ? $"{Name}: no plates." : $"{Name}: {_plates.Count} plate(s) saved.");
+
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    // ===================================================================== vehicle labels
+
+    /// <summary>Replaces the vehicle labels (and the parts marked as having none) and saves them.</summary>
+    public void SetLabels(IEnumerable<VehicleMark> vehicles, IEnumerable<double> emptyParts)
+    {
+        _vehicles = VehicleLabels.Normalize(vehicles, Duration);
+        _emptyParts = VehicleLabels.NormalizeEmpty(emptyParts, Duration);
+
+        if (Save())
+            Say($"{Name}: labels saved: {LabelSummary.Describe()}.");
 
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -230,7 +261,7 @@ public sealed class VideoFile : IDisposable
     {
         try
         {
-            VideoSidecar.Save(Path, _skips, Motion, _ownSettings, _plates);
+            VideoSidecar.Save(Path, _skips, Motion, _ownSettings, _plates, _vehicles, _emptyParts);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
