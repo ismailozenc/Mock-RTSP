@@ -331,8 +331,25 @@ public sealed partial class MainForm : Form, ICameraHost
                 Log($"'{camera.StreamPath}': moved to the part at {PlateMarks.FormatTime(seconds)} for labelling.");
             };
 
+        // Plates read earlier, and the scanner for reading them (Birel Plaka's models in the models folder).
+        PlateScan? plateScan = null;
+        try
+        {
+            plateScan = PlateScanFile.Load(video.Path);
+        }
+        catch (InvalidDataException ex)
+        {
+            Log($"{video.Name}: the plates read earlier cannot be shown: {ex.Message}");
+        }
+
+        string models = Path.Combine(AppContext.BaseDirectory, "models");
+        string? ffmpeg = _ffmpegExe;
+        Func<PlateScanner>? createScanner = ffmpeg is not null && File.Exists(Path.Combine(models, PlateScanSettings.DetectorFile))
+            ? () => new PlateScanner(ffmpeg, models, PlateScanSettings.BirelPlakaFactory)
+            : null;
+
         using var dialog = new LabelsDialog(video.Path, video.Info, _ffmpegExe, video.Skips, video.Vehicles, video.EmptyParts,
-            position, showAt, seek);
+            position, showAt, seek, plateScan, createScanner);
         if (dialog.ShowDialog(this) == DialogResult.OK)
             video.SetLabels(dialog.Vehicles, dialog.EmptyParts);
     }

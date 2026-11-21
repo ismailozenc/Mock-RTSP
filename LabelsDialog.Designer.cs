@@ -5,7 +5,8 @@ namespace MockRtsp;
 // Layout: one grid docked Fill, two columns. Row 0 the summary (both columns). Row 1 (the only
 // row that grows): on the left the player showing the selected part with the list of playing parts
 // under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
-// moving between parts and exporting, row 3 OK and Cancel.
+// moving between parts, reading plates and exporting, row 3 OK and Cancel. Under the vehicles: the
+// cars of the part found by the plate scan, the readings of the selected car, and their buttons.
 public sealed partial class LabelsDialog
 {
     private System.ComponentModel.IContainer? components = null;
@@ -33,6 +34,25 @@ public sealed partial class LabelsDialog
     private FlowLayoutPanel _playRow = null!;
     private Button _play = null!;
     private Label _playNote = null!;
+    private Label _carsTitle = null!;
+    private ImageList _plateImages = null!;
+    private ListView _cars = null!;
+    private ColumnHeader _colCarPlate = null!;
+    private ColumnHeader _colCarDirection = null!;
+    private ColumnHeader _colCarTime = null!;
+    private ColumnHeader _colCarReads = null!;
+    private ColumnHeader _colCarResult = null!;
+    private ListView _readings = null!;
+    private ColumnHeader _colReading = null!;
+    private ColumnHeader _colReadingCount = null!;
+    private ColumnHeader _colReadingOcr = null!;
+    private FlowLayoutPanel _carTools = null!;
+    private Button _useCar = null!;
+    private Button _useForSelected = null!;
+    private Button _useAll = null!;
+    private Button _readPlates = null!;
+    private ProgressBar _scanProgress = null!;
+    private Label _scanStatus = null!;
     private FlowLayoutPanel _tools = null!;
     private Button _previousUnlabelled = null!;
     private Button _nextUnlabelled = null!;
@@ -54,6 +74,7 @@ public sealed partial class LabelsDialog
 
     private void InitializeComponent()
     {
+        components = new System.ComponentModel.Container();
         _grid = new TableLayoutPanel();
         _summary = new Label();
         _left = new TableLayoutPanel();
@@ -77,6 +98,25 @@ public sealed partial class LabelsDialog
         _playRow = new FlowLayoutPanel();
         _play = new Button();
         _playNote = new Label();
+        _carsTitle = new Label();
+        _plateImages = new ImageList(components);
+        _cars = new ListView();
+        _colCarPlate = new ColumnHeader();
+        _colCarDirection = new ColumnHeader();
+        _colCarTime = new ColumnHeader();
+        _colCarReads = new ColumnHeader();
+        _colCarResult = new ColumnHeader();
+        _readings = new ListView();
+        _colReading = new ColumnHeader();
+        _colReadingCount = new ColumnHeader();
+        _colReadingOcr = new ColumnHeader();
+        _carTools = new FlowLayoutPanel();
+        _useCar = new Button();
+        _useForSelected = new Button();
+        _useAll = new Button();
+        _readPlates = new Button();
+        _scanProgress = new ProgressBar();
+        _scanStatus = new Label();
         _tools = new FlowLayoutPanel();
         _previousUnlabelled = new Button();
         _nextUnlabelled = new Button();
@@ -92,6 +132,7 @@ public sealed partial class LabelsDialog
         _editor.SuspendLayout();
         _partTools.SuspendLayout();
         _playRow.SuspendLayout();
+        _carTools.SuspendLayout();
         _tools.SuspendLayout();
         _bottom.SuspendLayout();
         SuspendLayout();
@@ -193,19 +234,88 @@ public sealed partial class LabelsDialog
         _playRow.Controls.Add(_play);
         _playRow.Controls.Add(_playNote);
 
+        // ================= Plates read in this part =================
+        _carsTitle.AutoSize = true;
+        _carsTitle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+        _carsTitle.Margin = new Padding(0, 12, 0, 4);
+        _carsTitle.MaximumSize = new Size(520, 0);
+        _carsTitle.Text = "Plates read in this part";
+
+        _plateImages.ColorDepth = ColorDepth.Depth24Bit;
+        _plateImages.ImageSize = new Size(108, 36);
+
+        _colCarPlate.Text = "Plate";
+        _colCarPlate.Width = 196;
+        _colCarDirection.Text = "Direction";
+        _colCarDirection.Width = 66;
+        _colCarTime.Text = "Time";
+        _colCarTime.Width = 58;
+        _colCarReads.Text = "Reads";
+        _colCarReads.Width = 48;
+        _colCarResult.Text = "Result";
+        _colCarResult.Width = 150;
+
+        _cars.Columns.AddRange(new ColumnHeader[] { _colCarPlate, _colCarDirection, _colCarTime, _colCarReads, _colCarResult });
+        _cars.Dock = DockStyle.Fill;
+        _cars.FullRowSelect = true;
+        _cars.HideSelection = false;
+        _cars.Margin = new Padding(0);
+        _cars.MultiSelect = false;
+        _cars.ShowItemToolTips = true;
+        _cars.SmallImageList = _plateImages;
+        _cars.View = View.Details;
+
+        _colReading.Text = "Readings of the selected car";
+        _colReading.Width = 196;
+        _colReadingCount.Text = "Reads";
+        _colReadingCount.Width = 48;
+        _colReadingOcr.Text = "Best OCR";
+        _colReadingOcr.Width = 70;
+
+        _readings.Columns.AddRange(new ColumnHeader[] { _colReading, _colReadingCount, _colReadingOcr });
+        _readings.Dock = DockStyle.Fill;
+        _readings.FullRowSelect = true;
+        _readings.HideSelection = false;
+        _readings.Margin = new Padding(0, 4, 0, 0);
+        _readings.MultiSelect = false;
+        _readings.View = View.Details;
+
+        _useCar.AutoSize = true;
+        _useCar.Text = "Add as vehicle";
+        _useForSelected.AutoSize = true;
+        _useForSelected.Text = "Put in the selected vehicle";
+        _useAll.AutoSize = true;
+        _useAll.Text = "Add every car of this part";
+
+        _carTools.AutoSize = true;
+        _carTools.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _carTools.Margin = new Padding(0, 6, 0, 0);
+        _carTools.WrapContents = true;
+        _carTools.Controls.Add(_useCar);
+        _carTools.Controls.Add(_useForSelected);
+        _carTools.Controls.Add(_useAll);
+
         _editor.ColumnCount = 1;
         _editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _editor.Dock = DockStyle.Fill;
         _editor.Margin = new Padding(0);
-        _editor.RowCount = 4;
+        _editor.RowCount = 8;
         _editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _editor.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        _editor.RowStyles.Add(new RowStyle(SizeType.Percent, 42F));
         _editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _editor.RowStyles.Add(new RowStyle(SizeType.Percent, 58F));
+        _editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 96F));
         _editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _editor.Controls.Add(_partTitle, 0, 0);
         _editor.Controls.Add(_table, 0, 1);
         _editor.Controls.Add(_partTools, 0, 2);
         _editor.Controls.Add(_playRow, 0, 3);
+        _editor.Controls.Add(_carsTitle, 0, 4);
+        _editor.Controls.Add(_cars, 0, 5);
+        _editor.Controls.Add(_readings, 0, 6);
+        _editor.Controls.Add(_carTools, 0, 7);
 
         // ================= Moving between parts =================
         _previousUnlabelled.AutoSize = true;
@@ -218,6 +328,16 @@ public sealed partial class LabelsDialog
         _export.AutoSize = true;
         _export.Margin = new Padding(18, 3, 3, 3);
         _export.Text = "Export CSV...";
+        _readPlates.AutoSize = true;
+        _readPlates.Margin = new Padding(18, 3, 3, 3);
+        _readPlates.Text = "Read plates in every part";
+        _scanProgress.Margin = new Padding(6, 6, 3, 3);
+        _scanProgress.Size = new Size(140, 18);
+        _scanProgress.Visible = false;
+        _scanStatus.AutoSize = true;
+        _scanStatus.ForeColor = SystemColors.GrayText;
+        _scanStatus.Margin = new Padding(6, 8, 3, 3);
+        _scanStatus.Text = "";
 
         _tools.AutoSize = true;
         _tools.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -227,6 +347,9 @@ public sealed partial class LabelsDialog
         _tools.Controls.Add(_nextUnlabelled);
         _tools.Controls.Add(_deleteOutside);
         _tools.Controls.Add(_export);
+        _tools.Controls.Add(_readPlates);
+        _tools.Controls.Add(_scanProgress);
+        _tools.Controls.Add(_scanStatus);
 
         // ================= OK and Cancel =================
         _cancel.DialogResult = DialogResult.Cancel;
@@ -248,8 +371,8 @@ public sealed partial class LabelsDialog
 
         // ================= Grid =================
         _grid.ColumnCount = 2;
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62F));
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38F));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 57F));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 43F));
         _grid.Dock = DockStyle.Fill;
         _grid.Padding = new Padding(12);
         _grid.RowCount = 4;
@@ -280,18 +403,26 @@ public sealed partial class LabelsDialog
         _deleteOutside.Click += new EventHandler(OnDeleteOutsideClick);
         _export.Click += new EventHandler(OnExportClick);
         _ok.Click += new EventHandler(OnOkClick);
+        _cars.SelectedIndexChanged += new EventHandler(OnCarSelected);
+        _cars.Resize += new EventHandler(OnCarsResize);
+        _cars.DoubleClick += new EventHandler(OnUseCarClick);
+        _readings.DoubleClick += new EventHandler(OnUseCarClick);
+        _useCar.Click += new EventHandler(OnUseCarClick);
+        _useForSelected.Click += new EventHandler(OnUseForSelectedClick);
+        _useAll.Click += new EventHandler(OnUseAllClick);
+        _readPlates.Click += new EventHandler(OnReadPlatesClick);
 
         // ================= Form =================
         AcceptButton = _ok;
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
         CancelButton = _cancel;
-        ClientSize = new Size(1240, 780);
+        ClientSize = new Size(1320, 840);
         Controls.Add(_grid);
         Font = new Font("Segoe UI", 9F);
         MaximizeBox = true;
         MinimizeBox = false;
-        MinimumSize = new Size(980, 620);
+        MinimumSize = new Size(1060, 680);
         ShowIcon = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -302,6 +433,8 @@ public sealed partial class LabelsDialog
         _partTools.PerformLayout();
         _playRow.ResumeLayout(false);
         _playRow.PerformLayout();
+        _carTools.ResumeLayout(false);
+        _carTools.PerformLayout();
         _editor.ResumeLayout(false);
         _editor.PerformLayout();
         _left.ResumeLayout(false);

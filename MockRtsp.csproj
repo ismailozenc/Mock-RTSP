@@ -11,6 +11,13 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Birel Plaka's plate detector and OCR (models\, see BirelPlaka\SOURCE.txt), for Read plates. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <None Include="models\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="BirelPlaka\SOURCE.txt" />
+  </ItemGroup>
+
   <!-- If the project folder has mediamtx\ and ffmpeg\ folders, copy them next to MockRtsp.exe on build. -->
   <ItemGroup Condition="Exists('mediamtx')">
     <None Include="mediamtx\**" CopyToOutputDirectory="PreserveNewest" />

@@ -1,0 +1,15 @@
+Copied verbatim from Birel Plaka (github.com/ismailozenc/Birel-Plaka), commit a4e0815
+("Plate consensus: one plate per car, decided by aligned voting", app 1.1.0):
+
+  OcrModelConfig.cs  OcrResult.cs  PlateRead.cs  PlateConsensus.cs  ReadGroups.cs
+  TravelEstimator.cs  RoadPerspective.cs
+
+and models/ (Birel Plaka's factory choice):
+
+  yolo-v9-t-384-license-plates-end2end.onnx   plate detector
+  cct_xs_v2_global.onnx                       OCR (fast-plate-ocr, MIT)
+  cct_xs_v2_global_plate_config.yaml          its plate config
+
+Do not edit these copies: to follow a newer Birel Plaka, copy the files again. AppConfigShim.cs
+(not from Birel Plaka) supplies the [Travel] settings TravelEstimator reads. Detector and PlateOCR
+are not copied: they use OpenCV; MockRtsp.PlateReader does the same steps without it.

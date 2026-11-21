@@ -8,7 +8,7 @@ Beyond looping a file, each camera behaves like a controllable camera:
 - skip ranges, picked automatically from a motion scan, so only the parts with movement are streamed
 - a substream (`.../102` next to `.../101`), like a real camera
 
-For vehicle detection testing, each video's playing parts can be labelled with the vehicles in them, coming or going, with their plates, and the timeline shows how many parts there are and how many are labelled.
+For vehicle detection testing, each video's playing parts can be labelled with the vehicles in them, coming or going, with their plates, and the timeline shows how many parts there are and how many are labelled. Birel Plaka's plate detector and OCR can read the plates of every part first, so labelling is mostly picking the right reading.
 
 For ALPR testing, each video can carry a ground-truth list of the plates in it. The app logs the moment each plate is actually streamed and scores your ALPR results against that log (hit rate, misses, latency). Each camera shows live stats (frame rate, bitrate, viewers). The whole setup can be saved as a project and reopened.
 
@@ -76,6 +76,18 @@ The dialog has:
 
 On the timeline, the labels strip under the play strip shows each playing part: a chip per vehicle with its plate (or its direction when it has none), green for coming and orange for going; the counts when the chips do not fit; "none" for a part with no vehicles; and an orange hatch with "?" for a part still to label. Hovering shows the part's labels in the preview caption. The camera panel and the video list show "7/12 part(s) labelled".
 
+### Reading plates with Birel Plaka
+
+**Read plates in every part** (bottom of the labels dialog) goes through every playing part of the video with Birel Plaka's plate detector, OCR and plate consensus, and lists the cars it read under the part's vehicles:
+- **The cars read in the selected part**: a picture of the plate, the plate, which way the car moved (coming, going, or unknown when the plate's size did not change enough), the time, how many reads it had and the result: "decided (60 reads agree)", or why no plate was decided (for example "Reads disagree on character 5"), with the best guess and a "?". Hover a car for the whole text.
+- **Readings of the selected car**: every different plate text the OCR gave for it, with how often and its best OCR confidence, so a wrong decision can be corrected.
+- Selecting a car shows its moment in the player, so you can check the plate and the direction.
+- **Add as vehicle** (or a double-click) adds the selected car, with the selected reading as its plate. **Put in the selected vehicle** writes the reading into the vehicle selected above. **Add every car of this part** adds all of them. Added cars are greyed out. A car whose direction is unknown is added with an empty direction, which you choose in the table.
+
+Nothing is labelled automatically: you still check each part and press OK.
+
+How it reads: each part is decoded by FFmpeg at 10 pictures a second (at most 1920 wide). Every picture goes through the detector; each plate box is cropped and read by the OCR; the reads are grouped into cars and decided the way Birel Plaka does it, with its factory settings (detector threshold 0.50, at least 5 reads, 72 % agreement, reads touching the picture edge counted as cut off). On 4 cores, reading takes about half as long as the playing parts last. **Stop reading** cancels it. The models come with the app (`models\` next to the exe). The results are saved in `<video file>.mockrtsp.plates.json`, so they are there the next time the dialog opens; **Read plates in every part** asks before reading again.
+
 Each vehicle is kept with its time, so its labels stay with it when the skips change: they belong to whichever playing part contains that time. Labels that end up in a skipped part are counted in the dialog, and **Delete labels in skipped parts** removes them. Labels are saved with the video in its `.mockrtsp.json`.
 
 ## Ground truth for ALPR testing
@@ -138,6 +150,8 @@ Everything about a video is kept in a file next to it, `<video file>.mockrtsp.js
 - its motion data: how much of the picture moves, 5 times a second, from the motion scan,
 - its ground-truth plates,
 - its vehicle labels: the vehicles in its playing parts (time, coming or going, plate), and the parts checked as having none.
+
+The plates read with Birel Plaka are kept in their own file, `<video file>.mockrtsp.plates.json`, since they hold pictures. Deleting it only loses the reading; the labels stay.
 
 The preview pictures for the timeline are kept next to it too, in `<video file>.mockrtsp.previews`: small JPEG pictures (a few KB each) with a table of where each one is, so they load at once and any moment can be shown straight away. They are made again if the video file changes. Deleting the file is safe; it is made again the next time.
 
@@ -224,6 +238,7 @@ PlatesDialog (ground truth per video) · ScoreDialog + PlateScorer (ALPR results
 | `options.json` | `%APPDATA%\MockRtsp\` | OptionsStore | Defaults for videos, server settings (logins in plain text), last folder, recent folders, last project, reopen-at-startup flag |
 | `errors.log` | `%LOCALAPPDATA%\MockRtsp\` | ErrorReporter | Unexpected exceptions with context |
 | `<video>.mockrtsp.json` | next to each video | VideoSidecar | Video's own settings (or none), skip ranges, motion data (base64), ground-truth plates (time, plate, optional region), vehicle labels (`vehicles`: time, `coming`/`going`, optional plate) and `emptyParts` (moments in parts checked as having no vehicles). Atomic save. Deleted when there is nothing to keep. Replaces the older `<video>.skips.json`, which is read and deleted on the first save |
+| `<video>.mockrtsp.plates.json` | next to each video | PlateScanFile | The last plate reading (Read plates in every part): when, the model files, the interval, the parts read (start, end, pictures) and the cars: start, end, time, decided, plate, reason, movement, reads, votes, agreement, readings (text, count, best OCR, best detection) and the plate and car pictures as base64 JPEGs. Atomic save. A damaged file is reported in the log and ignored |
 | `<video>.mockrtsp.previews` | next to each video | ThumbnailStrip | Binary: `"MRTPREV1"`, video size and last-write ticks, width, height, interval, count, one int32 length per picture, then the JPEGs. Rebuilt if the video changed or the file is damaged |
 | `*.mockrtsp-project` | where the user saves it | ProjectFile | JSON: port, StartServer, Settings (StreamOptions without the remembered fields), VideoFolder, Cameras[] (StreamPath, Videos, Running, Paused, Speed, Video, PositionSeconds). Paths are relative to the project folder when inside it |
 | `ground-truth-YYYY-MM-DD.csv` | `Documents\MockRtsp\ground-truth\` or the folder in Settings > Server | GroundTruthLog | One line per plate streamed. Columns: utc_time, local_time, camera, substream, video, video_time, plate, x, y, width, height, stream_x, stream_y, stream_width, stream_height |
@@ -249,7 +264,7 @@ PlatesDialog (ground truth per video) · ScoreDialog + PlateScorer (ALPR results
 
 ## File reference
 
-Every source file, what it is for and what it does. All code is in namespace `MockRtsp`, one project (`MockRtsp.csproj`, net8.0-windows, WinForms, nullable on, implicit usings).
+Every source file, what it is for and what it does. All code is in namespace `MockRtsp` (except the copies in `BirelPlaka\`, which keep Birel Plaka's `Birel_Plaka`), one project (`MockRtsp.csproj`, net8.0-windows, WinForms, nullable on, implicit usings).
 
 ### Entry and infrastructure
 
@@ -385,14 +400,18 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `Result` holds the edited copy; `CommitTyped` fixes NumericUpDown typing.
 - **`PlaylistDialog.cs` / `PlaylistDialog.Designer.cs`**: two lists (videos in the folder, and the playlist) with Add, Remove, Move up/down and Other file.... `Files` returns the chosen order.
 - **`PlatesDialog.cs` / `PlatesDialog.Designer.cs`**: a DataGridView of time, plate, x, y, width and height for one video, with Add at playhead, Remove, Import CSV... and Export CSV.... `Plates` returns the checked, sorted list; errors name the row.
-- **`LabelsDialog.cs` / `LabelsDialog.Designer.cs`**: the labels of one video. Left, a PartPlayer playing the selected part with a ListView of the playing parts (unlabelled ones orange) under it, below a summary line; right, a DataGridView of the selected part's vehicles (time, direction combo, plate) with Add vehicle at the player's time, Remove, "No vehicles in this part" and Move the camera here (a seek callback, null when no camera plays the video). Previous/Next to label, Delete labels in skipped parts, Export CSV. Edits are kept per part as the selection moves (`CommitCurrent` checks every row is a time inside the part); `Vehicles` and `EmptyParts` return the result after OK.
+- **`LabelsDialog.cs` / `LabelsDialog.Designer.cs`**: the labels of one video. Left, a PartPlayer playing the selected part with a ListView of the playing parts (unlabelled ones orange) under it, below a summary line; right, a DataGridView of the selected part's vehicles (time, direction combo, plate) with Add vehicle at the player's time, Remove, "No vehicles in this part" and Move the camera here (a seek callback, null when no camera plays the video). Previous/Next to label, Delete labels in skipped parts, Export CSV. Edits are kept per part as the selection moves (`CommitCurrent` checks every row is a time inside the part); `Vehicles` and `EmptyParts` return the result after OK. Under the vehicles, the cars of the selected part from the plate reading (`_cars`, plate pictures in `_plateImages`) and the selected car's readings (`_readings`), with Add as vehicle, Put in the selected vehicle and Add every car of this part; `_used` remembers which cars were added (by reference). Read plates in every part runs `PlateScanner.Scan` on a background task (a `Func<PlateScanner>` from MainForm, null when FFmpeg or the models are missing), shows its progress, saves with `PlateScanFile` and can be stopped; closing the dialog stops it.
+- **`PlateReader.cs`**: Birel Plaka's Detector and PlateOCR without OpenCV. Loads the two ONNX models (ONNX Runtime) and checks the OCR model against its plate config like PlateOCR. `Read(rgb, width, height)` stretches the frame to the detector input (planar RGB 0..1), keeps boxes at or above the threshold (rows of 7: batch, x1, y1, x2, y2, class, score, clamped like Birel Plaka), crops each box and stretches it to the OCR input (NHWC bytes), decodes with `OcrResult.Decode` and drops empty reads. `Resize` is a bilinear resize sampled like OpenCV's INTER_LINEAR, so the models see the same pixels as in Birel Plaka.
+- **`PlateScan.cs`**: the plate reading of a video. `PlateScanSettings.BirelPlakaFactory` holds Birel Plaka's factory settings (detection, [Travel], [Consensus] and grouping). `PlateScanner.Scan(video, info, parts, progress, cancel)` decodes each part with FFmpeg (`-ss -t`, `fps=10`, `rgb24` raw frames), runs `PlateReader`, feeds Birel Plaka's `TravelEstimator` and `ReadGroups` per part as Birel Plaka does per camera, and turns each group into a `PlateCar` (decision, reason in plain English, movement, readings, plate and car JPEG crops). `PlateScanFile` loads and saves the result as `<video>.mockrtsp.plates.json`. `PlateScan.CarsIn(part)` gives a part's cars.
+- **`BirelPlaka\`**: files copied unchanged from Birel Plaka (commit a4e0815): `OcrModelConfig.cs`, `OcrResult.cs`, `PlateRead.cs`, `PlateConsensus.cs`, `ReadGroups.cs`, `TravelEstimator.cs`, `RoadPerspective.cs`. `AppConfigShim.cs` supplies the `AppConfig.Travel` settings TravelEstimator reads. `SOURCE.txt` says where they came from. Do not edit them; copy them again to follow Birel Plaka.
+- **`models\`**: Birel Plaka's factory models, copied to the output: `yolo-v9-t-384-license-plates-end2end.onnx` (plate detector), `cct_xs_v2_global.onnx` (OCR, fast-plate-ocr) and `cct_xs_v2_global_plate_config.yaml`.
 - **`PartPlayer.cs`**: a Control that plays one part of a video file, for labelling. `SetVideo(ffmpeg, file, info)`, `PlayPart(start, end)`, `ShowMoment(t)` (paused), `Position`, `Stop()`. A `Decoder` runs `ffmpeg -ss <start> -i <file> -t <length> -vf scale -pix_fmt bgr24 -f rawvideo pipe:1` at the picture's size (at most 1600 wide, width a multiple of 4 so bitmap rows need no padding) and reads pictures on a background thread into a small BlockingCollection, so FFmpeg waits while paused. A 5 ms WinForms timer shows them at the video's frame rate times the speed; at the end of the part it loops or pauses. Frame back decodes again from one frame earlier. Zoom: `_zoom` and `_focus` pick the source rectangle drawn into the letterboxed picture area. Toolbar buttons are child controls created in code, like the Timeline's scroll bar.
 - **`ScoreDialog.cs` / `ScoreDialog.Designer.cs`**: picks the ground-truth log and the results file, sets the before/after window, shows `PlateScorer.Summary`, and saves the CSV report.
 - **`MainForm.resx`, `OptionsDialog.resx`**: resource files added by the Visual Studio designer. Nothing in them is used by the code.
 
 ### Other files
 
-- **`MockRtsp.csproj`**: net8.0-windows WinExe with WinForms and PerMonitorV2 DPI. It copies `mediamtx\` and `ffmpeg\` to the output when they exist.
+- **`MockRtsp.csproj`**: net8.0-windows WinExe with WinForms and PerMonitorV2 DPI. It copies `mediamtx\` and `ffmpeg\` to the output when they exist, and `models\` always. NuGet: `Microsoft.ML.OnnxRuntime` (for the plate reading).
 - **`MockRtsp.sln`**: the solution.
 - **`.gitignore`**: bin, obj, .vs, user files, and the `mediamtx/` and `ffmpeg/` binaries.
 
@@ -432,7 +451,13 @@ Newest last. Commit hashes are on `main`.
 - A player in the labels dialog plays the selected part from the file (FFmpeg raw frames), looping, with pause, frame steps, speed and mouse-wheel zoom to read plates; Add vehicle uses its time. Label parts... under the video list labels a video without a camera.
 - Checked by compiling against the .NET 8 Windows Forms reference assemblies on Linux (0 errors, 0 warnings), a console test of the labels logic and the sidecar round trip, and the Timeline and LabelsDialog (with the player decoding a real test video through FFmpeg) driven under Mono WinForms (net48) with screenshots from Xvfb. Not yet run on Windows.
 
+**2026-11-21: read plates with Birel Plaka**
+- Read plates in every part in the labels dialog: Birel Plaka's detector, OCR and plate consensus over every playing part, the cars read per part with plate pictures, direction and all readings; add them as vehicles or put a reading in a vehicle. Saved in `<video>.mockrtsp.plates.json`. Birel Plaka's logic files and models are copied into `BirelPlaka\` and `models\`; Birel Plaka itself is not changed.
+- Checked on Linux: the real models read a test video made from plate photos (12 s of playing parts read in 6.7 s; both cars decided as the right plate from 60 reads, direction right), the results file saved and loaded again, and the dialog driven under Mono WinForms with screenshots. Compiled against the .NET 8 Windows Forms reference assemblies (0 errors). Not yet run on Windows.
+
 ## Where we left off
+
+- **Reading plates** has not run on Windows yet. Check that ONNX Runtime loads (the NuGet package brings `onnxruntime.dll`), how long a real video takes, and the cars list at higher scaling. The reading decodes with FFmpeg, not libvlc as Birel Plaka does for cameras, so pictures can differ slightly from what Birel Plaka sees live.
 
 - **Vehicle labels** (Labels... dialog, labels strip) are not yet run on Windows; check the dialog's layout and the strip's text at 100 % and higher scaling. Next step: score a vehicle detector's results (time, direction, plate) against the labels, like Score ALPR results does for plates.
 - **Not yet confirmed on Windows**: the latest UI (playlist controls, Playlist dialog, project buttons, the timeline drawing, the Plates and Score dialogs, the stats text) was checked under Mono only. Things to look at on Windows:

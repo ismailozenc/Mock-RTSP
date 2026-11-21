@@ -8,6 +8,9 @@ namespace MockRtsp;
 /// and their plates can be seen while labelling (pause, step frame by frame, zoom with the mouse
 /// wheel). The list shows every playing part and how many are labelled; "Next to label" walks
 /// through the rest, and "Move the camera here" jumps the camera's stream to the part.
+/// "Read plates in every part" reads the plates of all playing parts with Birel Plaka's models and
+/// logic (<see cref="PlateScanner"/>); each part then lists the cars found, with a picture of the
+/// plate, every reading and the direction, to add as vehicles after checking them.
 /// The layout lives in LabelsDialog.Designer.cs.
 /// </summary>
 public sealed partial class LabelsDialog : Form
@@ -21,10 +24,18 @@ public sealed partial class LabelsDialog : Form
     private readonly List<double> _empty;           // moments in parts checked as having no vehicles
     private int _current = -1;
     private bool _loading;
+    private readonly string _videoPath;
+    private readonly VideoInfo _info;
+    private readonly Func<PlateScanner>? _createScanner;
+    private PlateScan? _scan;
+    private List<PlateCar> _partCars = new();
+    private readonly HashSet<PlateCar> _used = new(ReferenceEqualityComparer.Instance);   // added as vehicles in this dialog
+    private CancellationTokenSource? _scanCancel;
+    private bool _selectingCar;          // set while the code (not the user) selects a car
 
     /// <summary>Parameterless constructor for the designer.</summary>
     public LabelsDialog() : this("video.mp4", new VideoInfo(1920, 1080, 25, 60), null, Array.Empty<SkipRange>(),
-        Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null)
+        Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null, null, null)
     {
     }
 
@@ -33,11 +44,22 @@ public sealed partial class LabelsDialog : Form
     /// <param name="cameraPosition">Where a camera playing this video is now, or null when none is.</param>
     /// <param name="showAt">A moment whose part is shown first, or null for the part at the camera's position.</param>
     /// <param name="seekCamera">Jumps that camera to a moment in this video, or null when none plays it.</param>
-    public LabelsDialog(string videoPath, VideoInfo info, string? ffmpegPath, IReadOnlyList<SkipRange> skips,
+    /// <param name="plateScan">The video's saved plate scan, or null.</param>
+    /// <param name="createScanner">Makes a plate scanner (loads the models), or null when plates cannot be read here.</param>
+    internal LabelsDialog(string videoPath, VideoInfo info, string? ffmpegPath, IReadOnlyList<SkipRange> skips,
         IReadOnlyList<VehicleMark> vehicles, IReadOnlyList<double> emptyParts,
-        Func<double>? cameraPosition, double? showAt, Action<double>? seekCamera)
+        Func<double>? cameraPosition, double? showAt, Action<double>? seekCamera,
+        PlateScan? plateScan, Func<PlateScanner>? createScanner)
     {
         InitializeComponent();
+
+        _videoPath = videoPath;
+        _info = info;
+        _scan = plateScan;
+        _createScanner = createScanner;
+        _readPlates.Enabled = createScanner is not null;
+        if (plateScan is not null)
+            _scanStatus.Text = $"Plates read {plateScan.ScannedUtc.ToLocalTime():g}: {plateScan.Cars.Count} car(s).";
 
         _videoName = Path.GetFileName(videoPath);
         _duration = info.DurationSeconds;
@@ -109,7 +131,8 @@ public sealed partial class LabelsDialog : Form
         for (int i = 0; i < groups.Count && i < _partList.Items.Count; i++)
         {
             var item = _partList.Items[i];
-            item.SubItems[4].Text = VehicleLabels.Describe(groups[i]);
+            int read = _scan?.CarsIn(_parts[i], _duration).Count ?? 0;
+            item.SubItems[4].Text = VehicleLabels.Describe(groups[i]) + (_scan is null ? "" : $"   [{read} read]");
             item.ForeColor = groups[i].IsLabelled ? SystemColors.WindowText : Color.DarkOrange;
         }
 
@@ -170,6 +193,7 @@ public sealed partial class LabelsDialog : Form
         }
 
         _player.PlayPart(part.Start, part.End);
+        ShowCars();
         return true;
     }
 
@@ -309,8 +333,331 @@ public sealed partial class LabelsDialog : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _scanCancel?.Cancel();
         _player.Stop();
         base.OnFormClosed(e);
+    }
+
+    // ===================================================================== plates read by the scan
+
+    /// <summary>The cars the plate scan found in the part shown, with their plate pictures.</summary>
+    private void ShowCars()
+    {
+        _cars.BeginUpdate();
+        try
+        {
+            _cars.Items.Clear();
+            _readings.Items.Clear();
+            _plateImages.Images.Clear();
+            _partCars = _scan is not null && _current >= 0 ? _scan.CarsIn(_parts[_current], _duration) : new List<PlateCar>();
+
+            if (_scan is null)
+            {
+                _carsTitle.Text = _createScanner is null
+                    ? "Plates cannot be read here: ffmpeg.exe or the plate models (models folder) are missing."
+                    : "No plates read yet: \"Read plates in every part\" (below) reads them in all parts of this video.";
+            }
+            else
+            {
+                _carsTitle.Text = _partCars.Count == 0
+                    ? "No plates were read in this part."
+                    : $"{_partCars.Count} car(s) read in this part. Check the reading in the player, then add it as a vehicle.";
+            }
+
+            for (int i = 0; i < _partCars.Count; i++)
+            {
+                var car = _partCars[i];
+                _plateImages.Images.Add(Thumbnail(car.PlateJpeg));
+                var item = new ListViewItem(car.Decided ? car.Plate : car.Plate + " ?", i);
+                item.SubItems.Add(car.Movement);
+                item.SubItems.Add(PlateMarks.FormatTime(car.Time));
+                item.SubItems.Add(car.Reads.ToString());
+                item.SubItems.Add(Result(car));
+                item.ToolTipText = Result(car);
+                if (_used.Contains(car))
+                    item.ForeColor = SystemColors.GrayText;
+                _cars.Items.Add(item);
+            }
+        }
+        finally
+        {
+            _cars.EndUpdate();
+        }
+
+        // The first car still to add is selected, without moving the player: the part keeps playing.
+        int first = _partCars.FindIndex(c => !_used.Contains(c));
+        if (first >= 0)
+        {
+            _selectingCar = true;
+            _cars.Items[first].Selected = true;
+            _cars.Items[first].Focused = true;
+            _selectingCar = false;
+        }
+
+        UpdateCarButtons();
+    }
+
+    /// <summary>The result column takes the rest of the list's width, so the reasons can be read.</summary>
+    private void OnCarsResize(object? sender, EventArgs e)
+    {
+        int others = _colCarPlate.Width + _colCarDirection.Width + _colCarTime.Width + _colCarReads.Width;
+        _colCarResult.Width = Math.Max(150, _cars.ClientSize.Width - others - 4);
+    }
+
+    private string Result(PlateCar car) =>
+        (_used.Contains(car) ? "added; " : "")
+        + (car.Decided ? $"decided ({car.Votes} reads agree)" : car.Reason ?? "not decided");
+
+    /// <summary>The plate crop fitted into the list's picture size, on white.</summary>
+    private Image Thumbnail(byte[]? jpeg)
+    {
+        var size = _plateImages.ImageSize;
+        var thumb = new Bitmap(size.Width, size.Height);
+        using var g = Graphics.FromImage(thumb);
+        g.Clear(Color.White);
+        if (jpeg is null)
+            return thumb;
+
+        try
+        {
+            using var stream = new MemoryStream(jpeg);
+            using var image = Image.FromStream(stream);
+            float scale = Math.Min(size.Width / (float)image.Width, size.Height / (float)image.Height);
+            float w = image.Width * scale, h = image.Height * scale;
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(image, (size.Width - w) / 2, (size.Height - h) / 2, w, h);
+        }
+        catch (ArgumentException)
+        {
+            // A damaged picture: the list shows the text only.
+        }
+
+        return thumb;
+    }
+
+    private PlateCar? SelectedCar =>
+        _cars.SelectedIndices.Count > 0 && _cars.SelectedIndices[0] < _partCars.Count ? _partCars[_cars.SelectedIndices[0]] : null;
+
+    /// <summary>The reading picked for the selected car: the one selected below, else the car's plate.</summary>
+    private string SelectedReading(PlateCar car) =>
+        _readings.SelectedItems.Count > 0 ? _readings.SelectedItems[0].Text : car.Plate;
+
+    private void OnCarSelected(object? sender, EventArgs e)
+    {
+        _readings.Items.Clear();
+        if (SelectedCar is { } car)
+        {
+            foreach (var reading in car.Readings)
+            {
+                var item = new ListViewItem(reading.Text);
+                item.SubItems.Add(reading.Count.ToString());
+                item.SubItems.Add($"{reading.BestOcr * 100:0}%");
+                _readings.Items.Add(item);
+            }
+
+            int index = car.Readings.ToList().FindIndex(r => r.Text == car.Plate);
+            if (_readings.Items.Count > 0)
+                _readings.Items[Math.Max(0, index)].Selected = true;
+
+            if (!_selectingCar)
+                _player.ShowMoment(car.Time);    // the moment of its best read, paused
+        }
+
+        UpdateCarButtons();
+    }
+
+    private void UpdateCarButtons()
+    {
+        bool car = SelectedCar is not null;
+        _useCar.Enabled = car;
+        _useForSelected.Enabled = car;
+        _useAll.Enabled = _partCars.Any(c => !_used.Contains(c));
+    }
+
+    /// <summary>Adds the selected car (with the selected reading) as a vehicle of this part.</summary>
+    private void OnUseCarClick(object? sender, EventArgs e)
+    {
+        if (SelectedCar is not { } car)
+            return;
+
+        int row = AddCar(car, SelectedReading(car));
+        AfterAdding(row);
+    }
+
+    /// <summary>Puts the selected reading into the vehicle selected in the table (and its direction, if that is still empty).</summary>
+    private void OnUseForSelectedClick(object? sender, EventArgs e)
+    {
+        if (SelectedCar is not { } car)
+            return;
+
+        if (_table.CurrentRow is not { } row || row.IsNewRow)
+        {
+            MessageBox.Show(this, "Select a vehicle in the table above first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _table.EndEdit();
+        row.Cells[2].Value = SelectedReading(car);
+        if (string.IsNullOrEmpty(row.Cells[1].Value as string) && car.Direction is { } direction)
+            row.Cells[1].Value = direction == VehicleDirection.Coming ? "coming" : "going";
+        MarkUsed(car);
+    }
+
+    /// <summary>Adds every car of the part not added yet, each with its plate (voted, or the best guess).</summary>
+    private void OnUseAllClick(object? sender, EventArgs e)
+    {
+        int last = -1;
+        foreach (var car in _partCars.Where(c => !_used.Contains(c)).ToList())
+            last = AddCar(car, car.Plate);
+        AfterAdding(last);
+    }
+
+    /// <summary>A new row for a car: its best read's time, its direction when known (else left to choose), and the plate.</summary>
+    private int AddCar(PlateCar car, string plate)
+    {
+        _table.EndEdit();
+        string? direction = car.Direction switch
+        {
+            VehicleDirection.Coming => "coming",
+            VehicleDirection.Going => "going",
+            _ => null
+        };
+
+        int index = _table.Rows.Add(PlateMarks.FormatTime(car.Time), direction, plate);
+        _noVehicles.Checked = false;
+        MarkUsed(car);
+        return index;
+    }
+
+    /// <summary>After adding: a row without a direction gets the direction cell, so it is chosen next.</summary>
+    private void AfterAdding(int row)
+    {
+        if (row < 0)
+            return;
+
+        var missing = _table.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => string.IsNullOrEmpty(r.Cells[1].Value as string));
+        if (missing is not null)
+        {
+            _table.CurrentCell = missing.Cells[1];
+            _scanStatus.Text = "The scan could not tell the direction of a vehicle: choose coming or going in the table.";
+        }
+        else
+        {
+            _table.CurrentCell = _table.Rows[row].Cells[2];
+        }
+    }
+
+    private void MarkUsed(PlateCar car)
+    {
+        _used.Add(car);
+        int i = _partCars.IndexOf(car);
+        if (i >= 0 && i < _cars.Items.Count)
+        {
+            _cars.Items[i].ForeColor = SystemColors.GrayText;
+            _cars.Items[i].SubItems[4].Text = Result(car);
+            _cars.Items[i].ToolTipText = Result(car);
+        }
+
+        UpdateCarButtons();
+    }
+
+    /// <summary>Reads the plates in every playing part (in the background), or stops a scan that is running.</summary>
+    private async void OnReadPlatesClick(object? sender, EventArgs e)
+    {
+        if (_scanCancel is not null)
+        {
+            _scanCancel.Cancel();
+            return;
+        }
+
+        if (_createScanner is not { } create || _parts.Count == 0)
+            return;
+
+        if (_scan is not null && MessageBox.Show(this,
+                $"The plates of this video were read on {_scan.ScannedUtc.ToLocalTime():g}. Read them again? The new reading replaces the old one (labels are not changed).",
+                Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+
+        var cancel = _scanCancel = new CancellationTokenSource();
+        var parts = _parts.ToList();
+        string path = _videoPath;
+        var info = _info;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        long lastShown = 0;
+
+        _readPlates.Text = "Stop reading";
+        _scanProgress.Value = 0;
+        _scanProgress.Visible = true;
+        _scanStatus.Text = "Loading the plate models...";
+
+        void Progress(double share, string message)
+        {
+            long now = watch.ElapsedMilliseconds;
+            if (now - Interlocked.Read(ref lastShown) < 200 && share < 1)
+                return;
+            Interlocked.Exchange(ref lastShown, now);
+
+            if (IsDisposed || !IsHandleCreated)
+                return;
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed)
+                    return;
+                _scanProgress.Value = Math.Max(0, Math.Min(100, (int)(share * 100)));
+                _scanStatus.Text = $"Reading plates, {share * 100:0}%: {message}";
+            }));
+        }
+
+        try
+        {
+            var scan = await Task.Run(() =>
+            {
+                using var scanner = create();
+                return scanner.Scan(path, info, parts, Progress, cancel.Token);
+            }, cancel.Token);
+
+            if (IsDisposed)
+                return;
+
+            _scan = scan;
+            _used.Clear();
+            string saved = "";
+            try
+            {
+                PlateScanFile.Save(path, scan);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                saved = $" They could not be saved next to the video ({ex.Message}).";
+            }
+
+            _scanStatus.Text = $"Read {scan.Cars.Count} car(s) in {parts.Count} part(s) in {watch.Elapsed.TotalSeconds:0} s.{saved}";
+            RefreshParts();
+            ShowCars();
+        }
+        catch (OperationCanceledException)
+        {
+            if (!IsDisposed)
+                _scanStatus.Text = _scan is null ? "Stopped." : "Stopped; the earlier reading is kept.";
+        }
+        catch (Exception ex)
+        {
+            if (!IsDisposed)
+            {
+                _scanStatus.Text = "Reading plates failed.";
+                MessageBox.Show(this, "The plates could not be read:\n\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        finally
+        {
+            _scanCancel = null;
+            cancel.Dispose();
+            if (!IsDisposed)
+            {
+                _readPlates.Text = "Read plates in every part";
+                _scanProgress.Visible = false;
+            }
+        }
     }
 
     // ===================================================================== moving between parts

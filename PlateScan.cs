@@ -1,0 +1,472 @@
+using System.Diagnostics;
+using System.Drawing.Imaging;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Birel_Plaka;
+
+namespace MockRtsp;
+
+/// <summary>
+/// The settings of a plate scan: Birel Plaka's factory values (defaults\camera-settings.ini of the
+/// copied version, see BirelPlaka\SOURCE.txt), so a scan reads plates the way Birel Plaka's cameras
+/// do. Plate-format and country checks are left out: the scan collects every plate it can read and
+/// the person labelling picks the right one.
+/// </summary>
+internal sealed record PlateScanSettings(
+    float DetectorThreshold,        // [Detection] DetectorThreshold
+    float MinDetection,             // [Confidence] MinDetection
+    int IntervalMs,                 // [Detection] IntervalMs: video time between analysed frames
+    TravelOptions Travel,           // [Travel]
+    ConsensusRules Rules,           // [Consensus] MinReads, MinShare, MinCover, DissentReads, DissentFraction
+    double GroupMaxSeconds,         // [Consensus] GroupMaxSeconds
+    double JoinMaxCost,             // [Consensus] JoinMaxCost
+    int EdgeMarginPixels,           // [Consensus] EdgeMarginPixels
+    int PhotoCandidates,            // [Consensus] PhotoCandidates
+    int MaxFrameWidth)              // wider videos are scanned scaled down to this width
+{
+    public static PlateScanSettings BirelPlakaFactory { get; } = new(
+        DetectorThreshold: 0.50f,
+        MinDetection: 0.60f,
+        IntervalMs: 100,
+        Travel: new TravelOptions(TimeSpan.FromSeconds(3), 3, TimeSpan.FromSeconds(0.4), TimeSpan.FromSeconds(1.5), 0.10, 0.06),
+        Rules: new ConsensusRules(MinReads: 5, MinShare: 0.72, MinCover: 2, DissentReads: 2, DissentFraction: 0.25),
+        GroupMaxSeconds: 10,
+        JoinMaxCost: 2.5,
+        EdgeMarginPixels: 2,
+        PhotoCandidates: 2,
+        MaxFrameWidth: 1920);
+
+    public const string DetectorFile = "yolo-v9-t-384-license-plates-end2end.onnx";
+    public const string OcrFile = "cct_xs_v2_global.onnx";
+    public const string OcrConfigFile = "cct_xs_v2_global_plate_config.yaml";
+}
+
+/// <summary>One distinct text read for a car: how often, and the best OCR and box confidence.</summary>
+internal sealed record PlateReading(string Text, int Count, double BestOcr, double BestDetection);
+
+/// <summary>
+/// One car found by a plate scan: its plate (voted by Birel Plaka's consensus when the reads clearly
+/// agree, otherwise the best guess and why), every distinct reading, the direction from its plate's
+/// movement, and JPEG crops of the plate and the car around it.
+/// </summary>
+internal sealed record PlateCar(
+    double Start,
+    double End,
+    double Time,                // the moment of the best read: the vehicle's label time
+    bool Decided,
+    string Plate,
+    string? Reason,
+    string Movement,            // coming, going, stopped, unclear or unknown
+    int Reads,
+    int Votes,
+    double? Agreement,          // lowest share of the vote of any character (1 = all reads agree)
+    IReadOnlyList<PlateReading> Readings,
+    byte[]? PlateJpeg,
+    byte[]? CarJpeg)
+{
+    /// <summary>The direction for a label, when the movement says coming or going.</summary>
+    [JsonIgnore]
+    public VehicleDirection? Direction => Movement switch
+    {
+        "coming" => VehicleDirection.Coming,
+        "going" => VehicleDirection.Going,
+        _ => null
+    };
+}
+
+internal sealed record ScannedPart(double Start, double End, int Frames);
+
+/// <summary>The result of scanning a video's playing parts, saved next to it (<see cref="PlateScanFile"/>).</summary>
+internal sealed record PlateScan(
+    DateTime ScannedUtc,
+    string Detector,
+    string Ocr,
+    int IntervalMs,
+    IReadOnlyList<ScannedPart> Parts,
+    IReadOnlyList<PlateCar> Cars)
+{
+    /// <summary>The cars of one playing part (those whose best read is inside it).</summary>
+    public List<PlateCar> CarsIn(PlayingPart part, double durationSeconds) =>
+        Cars.Where(c => part.Contains(c.Time, durationSeconds)).OrderBy(c => c.Time).ToList();
+}
+
+/// <summary>"&lt;video&gt;.mockrtsp.plates.json": the latest plate scan of a video (crops inside, base64).</summary>
+internal static class PlateScanFile
+{
+    private static readonly JsonSerializerOptions JsonSettings = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    public static string PathFor(string videoPath) => videoPath + ".mockrtsp.plates.json";
+
+    /// <summary>The saved scan, or null when there is none. Throws InvalidDataException when the file cannot be read.</summary>
+    public static PlateScan? Load(string videoPath)
+    {
+        string path = PathFor(videoPath);
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<PlateScan>(File.ReadAllText(path), JsonSettings)
+                   ?? throw new InvalidDataException("the file is empty");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"'{Path.GetFileName(path)}' could not be read: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>Saves atomically (written beside, then swapped in).</summary>
+    public static void Save(string videoPath, PlateScan scan)
+    {
+        string path = PathFor(videoPath);
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(scan, JsonSettings));
+        if (File.Exists(path))
+            File.Replace(temp, path, null);
+        else
+            File.Move(temp, path);
+    }
+}
+
+/// <summary>
+/// Reads the plates in a video's playing parts with Birel Plaka's models and logic: FFmpeg decodes
+/// each part at <see cref="PlateScanSettings.IntervalMs"/> (like a camera analysing a frame every
+/// IntervalMs), <see cref="PlateReader"/> finds and reads the plates, <see cref="TravelEstimator"/>
+/// follows each plate across frames as one car (and tells its direction), and <see cref="ReadGroups"/>
+/// votes each car's reads into one plate. Each part is scanned on its own. Runs on the caller's
+/// thread (call it from a background task); not thread-safe.
+/// </summary>
+internal sealed class PlateScanner : IDisposable
+{
+    private const double TicksPerSecond = 1000;    // read times are video milliseconds
+
+    private readonly string _ffmpeg;
+    private readonly PlateScanSettings _settings;
+    private readonly OcrModelConfig _ocrConfig;
+    private readonly PlateReader _reader;
+
+    /// <summary>Loads the models from <paramref name="modelsFolder"/>. Throws when they are missing or do not match.</summary>
+    public PlateScanner(string ffmpegPath, string modelsFolder, PlateScanSettings settings)
+    {
+        _ffmpeg = ffmpegPath;
+        _settings = settings;
+
+        string detector = Path.Combine(modelsFolder, PlateScanSettings.DetectorFile);
+        string ocr = Path.Combine(modelsFolder, PlateScanSettings.OcrFile);
+        string config = Path.Combine(modelsFolder, PlateScanSettings.OcrConfigFile);
+        foreach (var file in new[] { detector, ocr, config })
+        {
+            if (!File.Exists(file))
+                throw new FileNotFoundException($"The plate model file is missing: {file}", file);
+        }
+
+        _ocrConfig = OcrModelConfig.Load(config);
+        _reader = new PlateReader(detector, ocr, _ocrConfig, settings.DetectorThreshold,
+            Math.Max(1, Environment.ProcessorCount / 2));
+    }
+
+    /// <summary>
+    /// Scans the parts. <paramref name="progress"/> gets the share done (0 to 1) and a line about it.
+    /// Throws OperationCanceledException when cancelled (nothing is returned then).
+    /// </summary>
+    public PlateScan Scan(string videoPath, VideoInfo info, IReadOnlyList<PlayingPart> parts,
+        Action<double, string> progress, CancellationToken cancel)
+    {
+        AppConfig.Travel = _settings.Travel;           // what the copied TravelEstimator reads
+
+        var policy = new GroupPolicy(
+            _settings.Rules,
+            PassGapSeconds: _settings.Travel.TrackTimeout.TotalSeconds,
+            MaxSeconds: _settings.GroupMaxSeconds,
+            JoinMaxCost: _settings.JoinMaxCost,
+            PhotoCandidates: _settings.PhotoCandidates,
+            MinDetection: () => _settings.MinDetection,
+            FormatCheck: _ => null,
+            RegionCheck: null);
+
+        var (width, height) = FrameSize(info);
+        double fps = 1000.0 / _settings.IntervalMs;
+        double total = Math.Max(1e-6, parts.Sum(p => p.Length));
+        double done = 0;
+        var cars = new List<PlateCar>();
+        var scanned = new List<ScannedPart>();
+
+        foreach (var part in parts)
+        {
+            cancel.ThrowIfCancellationRequested();
+            var travel = new TravelEstimator(TicksPerSecond);
+            var groups = new ReadGroups(policy, _ocrConfig.Alphabet, TicksPerSecond);
+            int frames = 0;
+            string where = $"part {part.Number} of {parts.Count}";
+
+            foreach (var (rgb, seconds) in Frames(videoPath, part, width, height, fps, cancel))
+            {
+                frames++;
+                long time = (long)Math.Round(seconds * TicksPerSecond);
+                var closed = groups.CloseExpired(time);
+
+                var hits = _reader.Read(rgb, width, height);
+                if (hits.Count > 0)
+                {
+                    var tracks = travel.Observe(hits.Select(h => h.Box).ToArray(), time, width, null);
+                    for (int i = 0; i < hits.Count; i++)
+                    {
+                        var hit = hits[i];
+                        var read = new Birel_Plaka.PlateRead(hit.Ocr, hit.Confidence, hit.Box,
+                            touchesLeft: hit.Box.X <= _settings.EdgeMarginPixels,
+                            touchesRight: hit.Box.Right >= width - _settings.EdgeMarginPixels,
+                            time, DateTime.UnixEpoch.AddMilliseconds(time), tracks[i]);
+                        var (_, closedNow) = groups.Add(read, () => new RgbFrame((byte[])rgb.Clone(), width, height));
+                        closed.AddRange(closedNow);
+                    }
+                }
+
+                cars.AddRange(closed.Select(ToCar));
+                progress((done + Math.Min(part.Length, seconds - part.Start)) / total, $"{where}: {cars.Count} car(s) so far");
+            }
+
+            cars.AddRange(groups.CloseAll().Select(ToCar));
+            scanned.Add(new ScannedPart(part.Start, part.End, frames));
+            done += part.Length;
+            progress(done / total, $"{where} done: {cars.Count} car(s) so far");
+        }
+
+        return new PlateScan(DateTime.UtcNow, PlateScanSettings.DetectorFile, PlateScanSettings.OcrFile, _settings.IntervalMs,
+            scanned, cars.OrderBy(c => c.Time).ToList());
+    }
+
+    /// <summary>The video's size, scaled down to MaxFrameWidth; even width and height for FFmpeg.</summary>
+    private (int Width, int Height) FrameSize(VideoInfo info)
+    {
+        int width = Math.Min(info.Width, _settings.MaxFrameWidth) / 2 * 2;
+        int height = (int)Math.Round(info.Height * (double)width / info.Width) / 2 * 2;
+        return (Math.Max(2, width), Math.Max(2, height));
+    }
+
+    /// <summary>The frames of one part, every 1/fps seconds, as RGB bytes with their time in the video.</summary>
+    private IEnumerable<(byte[] Rgb, double Seconds)> Frames(string video, PlayingPart part, int width, int height, double fps,
+        CancellationToken cancel)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        var psi = new ProcessStartInfo(_ffmpeg)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var arg in new[]
+                 {
+                     "-hide_banner", "-loglevel", "error", "-nostdin",
+                     "-ss", part.Start.ToString("0.000", inv), "-i", video,
+                     "-t", part.Length.ToString("0.000", inv),
+                     "-map", "0:v:0", "-an", "-sn", "-dn",
+                     "-vf", $"fps={fps.ToString("0.###", inv)},scale={width}:{height}",
+                     "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"
+                 })
+            psi.ArgumentList.Add(arg);
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("FFmpeg did not start.");
+        var errors = new List<string>();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+                lock (errors) errors.Add(e.Data.Trim());
+        };
+        process.BeginErrorReadLine();
+
+        try
+        {
+            var stream = process.StandardOutput.BaseStream;
+            int frameBytes = width * height * 3;
+            for (int n = 0; ; n++)
+            {
+                cancel.ThrowIfCancellationRequested();
+                var rgb = new byte[frameBytes];
+                int got = 0;
+                while (got < frameBytes)
+                {
+                    int read = stream.Read(rgb, got, frameBytes - got);
+                    if (read <= 0)
+                        break;
+                    got += read;
+                }
+
+                if (got < frameBytes)
+                    break;
+
+                yield return (rgb, part.Start + n / fps);
+            }
+
+            process.WaitForExit();
+            lock (errors)
+            {
+                if (process.ExitCode != 0 && errors.Count > 0)
+                    throw new InvalidOperationException($"FFmpeg could not read part {part.Number}: {string.Join(" ", errors.TakeLast(2))}");
+            }
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+            }
+        }
+    }
+
+    private PlateCar ToCar(GroupView view)
+    {
+        try
+        {
+            var reads = view.Reads.Select(r => r.Read).ToList();
+            var readings = view.Reads
+                .Where(r => r.Read.Text.Length > 0)
+                .GroupBy(r => r.Read.Text)
+                .Select(g => new PlateReading(g.Key, g.Count(),
+                    Math.Round(g.Max(r => r.Read.Ocr.Confidence), 3),
+                    Math.Round(g.Max(r => r.Read.DetectionConfidence), 3)))
+                .OrderByDescending(r => r.Count)
+                .ThenByDescending(r => r.BestOcr)
+                .ToList();
+
+            var best = view.BestRead ?? reads.OrderByDescending(r => r.WeakestConfidence).First();
+            string movement = (view.TrackKey as TravelTrack)?.Estimate.Direction switch
+            {
+                TravelDirection.Approaching => "coming",
+                TravelDirection.Leaving => "going",
+                TravelDirection.Stopped => "stopped",
+                TravelDirection.Unclear => "unclear",
+                _ => "unknown"
+            };
+
+            byte[]? plateJpeg = null, carJpeg = null;
+            if (view.Photo is RgbFrame photo)
+            {
+                plateJpeg = photo.Jpeg(Grow(best.Box, 0.15f, 0.35f), maxWidth: 360);
+                carJpeg = photo.Jpeg(Grow(best.Box, 2.5f, 5f), maxWidth: 480);
+            }
+
+            return new PlateCar(
+                Seconds(reads.Min(r => r.Time)),
+                Seconds(reads.Max(r => r.Time)),
+                Seconds(best.Time),
+                view.State == GroupState.Decided,
+                view.Text.Length > 0 ? view.Text : readings.FirstOrDefault()?.Text ?? string.Empty,
+                view.State == GroupState.Decided ? null : Reason(view),
+                movement,
+                view.Reads.Count,
+                view.Votes,
+                view.Consensus is { } c ? Math.Round(c.LowestShare, 3) : null,
+                readings,
+                plateJpeg,
+                carJpeg);
+        }
+        finally
+        {
+            view.Photo?.Release();
+        }
+    }
+
+    /// <summary>Why a car's plate was not decided, in the words of Birel Plaka's ConsensusText.</summary>
+    private string Reason(GroupView view) => view.Reason switch
+    {
+        UndecidedReason.TooFewReads => $"Too few reads ({view.Votes}, at least {_settings.Rules.MinReads} needed)",
+        UndecidedReason.NothingRead => "No characters could be read",
+        UndecidedReason.CutOff => "Plate may be cut off: most reads touch the edge of the picture",
+        UndecidedReason.TooFewCover => $"Character {view.ReasonPosition} was seen by too few reads",
+        UndecidedReason.Disagree => $"Reads disagree on character {view.ReasonPosition}",
+        UndecidedReason.Dissent => $"Several reads back a different answer for character {view.ReasonPosition}",
+        UndecidedReason.DissentingReads => "Several reads did not fit this plate (another car on the same spot?)",
+        _ => view.Reason.ToString()
+    };
+
+    private static double Seconds(long ticks) => Math.Round(ticks / TicksPerSecond, 3);
+
+    /// <summary>The box grown by a share of its width / height on every side.</summary>
+    private static RectangleF Grow(RectangleF box, float x, float y) =>
+        RectangleF.FromLTRB(box.Left - box.Width * x, box.Top - box.Height * y, box.Right + box.Width * x, box.Bottom + box.Height * y);
+
+    public void Dispose() => _reader.Dispose();
+
+    /// <summary>A frame kept as a car's photo candidate (RGB bytes).</summary>
+    private sealed class RgbFrame : IFrameHandle
+    {
+        private byte[]? _rgb;
+        private readonly int _width, _height;
+
+        public RgbFrame(byte[] rgb, int width, int height)
+        {
+            _rgb = rgb;
+            _width = width;
+            _height = height;
+        }
+
+        public Task<byte[]?> EncodeJpegAsync() => Task.FromResult(Jpeg(new RectangleF(0, 0, _width, _height), _width));
+
+        public void Release() => _rgb = null;
+
+        /// <summary>A JPEG of an area of the frame (clamped to it), at most maxWidth wide, or null when nothing is left.</summary>
+        public byte[]? Jpeg(RectangleF area, int maxWidth)
+        {
+            if (_rgb is not { } rgb)
+                return null;
+
+            int x0 = Math.Max(0, (int)area.Left), y0 = Math.Max(0, (int)area.Top);
+            int x1 = Math.Min(_width, (int)Math.Ceiling(area.Right)), y1 = Math.Min(_height, (int)Math.Ceiling(area.Bottom));
+            int w = x1 - x0, h = y1 - y0;
+            if (w <= 1 || h <= 1)
+                return null;
+
+            using var bitmap = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+            var data = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                var row = new byte[w * 3];
+                for (int y = 0; y < h; y++)
+                {
+                    int src = ((y0 + y) * _width + x0) * 3;
+                    for (int x = 0; x < w; x++)
+                    {
+                        row[x * 3] = rgb[src + x * 3 + 2];        // GDI+ rows are BGR
+                        row[x * 3 + 1] = rgb[src + x * 3 + 1];
+                        row[x * 3 + 2] = rgb[src + x * 3];
+                    }
+
+                    Marshal.Copy(row, 0, data.Scan0 + y * data.Stride, w * 3);
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            // Small enough to keep many cars in the results file, sharp enough to read the plate.
+            using Bitmap picture = w <= maxWidth ? (Bitmap)bitmap.Clone() : Scaled(bitmap, maxWidth, Math.Max(1, (int)Math.Round(h * (double)maxWidth / w)));
+
+            using var stream = new MemoryStream();
+            var codec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 88L);
+            picture.Save(stream, codec, parameters);
+            return stream.ToArray();
+        }
+
+        private static Bitmap Scaled(Bitmap source, int width, int height)
+        {
+            var scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using var g = Graphics.FromImage(scaled);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g.DrawImage(source, new Rectangle(0, 0, width, height));
+            return scaled;
+        }
+    }
+}
