@@ -47,13 +47,14 @@ public sealed record LabelSummary(int Parts, int Labelled, int Vehicles, int Com
     /// <summary>"12 parts, 7 labelled (9 vehicles: 5 coming, 4 going), 5 to label".</summary>
     public string Describe()
     {
-        var text = new StringBuilder($"{Parts} playing part{(Parts == 1 ? "" : "s")}, {Labelled} labelled");
+        var text = new StringBuilder(Loc.T(Parts == 1 ? "{0} playing part" : "{0} playing parts", Parts));
+        text.Append(Loc.T(", {0} labelled", Labelled));
         if (Vehicles > 0)
-            text.Append($" ({Vehicles} vehicle{(Vehicles == 1 ? "" : "s")}: {Coming} coming, {Going} going)");
+            text.Append(Loc.T(Vehicles == 1 ? " ({0} vehicle: {1} coming, {2} going)" : " ({0} vehicles: {1} coming, {2} going)", Vehicles, Coming, Going));
         if (ToLabel > 0)
-            text.Append($", {ToLabel} to label");
+            text.Append(Loc.T(", {0} to label", ToLabel));
         if (Outside > 0)
-            text.Append($"; {Outside} label{(Outside == 1 ? "" : "s")} now in skipped parts");
+            text.Append(Loc.T(Outside == 1 ? "; {0} label now in skipped parts" : "; {0} labels now in skipped parts", Outside));
         return text.ToString();
     }
 }
@@ -148,8 +149,8 @@ public static class VehicleLabels
     /// <summary>"coming SBFN79E, going (no plate)" for a part, or "no vehicles" / "not labelled".</summary>
     public static string Describe(PartLabels group) =>
         group.Vehicles.Count > 0
-            ? string.Join(", ", group.Vehicles.Select(v => v.DirectionText + " " + (v.Plate.Length > 0 ? v.Plate : "(no plate)")))
-            : group.MarkedEmpty ? "no vehicles" : "not labelled";
+            ? string.Join(", ", group.Vehicles.Select(v => Loc.T(v.DirectionText) + " " + (v.Plate.Length > 0 ? v.Plate : Loc.T("(no plate)"))))
+            : Loc.T(group.MarkedEmpty ? "no vehicles" : "not labelled");
 
     public static bool TryParseDirection(string? text, out VehicleDirection direction)
     {

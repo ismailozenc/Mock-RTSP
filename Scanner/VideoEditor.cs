@@ -24,13 +24,77 @@ public sealed partial class VideoEditor : UserControl
     private List<PlateCar> _partCars = new();
     private readonly HashSet<PlateCar> _used = new(ReferenceEqualityComparer.Instance);   // already vehicles
     private bool _selectingCar;          // set while the code (not the user) selects a car
+    private string? _scanState;          // the last scan state shown after the video's name
     private static string? _birelSettingsFile;       // the camera-settings.ini chosen last (this run)
 
     public VideoEditor()
     {
         InitializeComponent();
+        SetDirectionChoices();
         ShowNoVideo();
     }
+
+    /// <summary>
+    /// The language changed (the window has already been re-texted by Loc.Apply): everything made at
+    /// run time is made again in the new language.
+    /// </summary>
+    internal void RefreshTexts()
+    {
+        SetDirectionChoices();
+        if (_video is null)
+        {
+            ShowNoVideo();
+            return;
+        }
+
+        ShowTitle(_scanState);
+        ShowMotion();
+        ShowArea();
+        RefreshParts();
+        ShowPartTitle();
+        ShowCars();
+        _scanStatus.Text = Loc.Translate(_scanStatus.Text);
+        _player.Invalidate();
+        _timeline.Invalidate();
+    }
+
+    /// <summary>
+    /// The direction list of the vehicles table in the current language. The cells hold the word as
+    /// shown; it is read back to "coming"/"going" (what is saved) by <see cref="TryReadTable"/>.
+    /// The words already in the table are changed too: the new ones are added before the old ones go,
+    /// so no cell is ever left with a value the list does not have.
+    /// </summary>
+    private void SetDirectionChoices()
+    {
+        string[] words = { Loc.T("coming"), Loc.T("going") };
+        foreach (string word in words)
+        {
+            if (!_colDirection.Items.Contains(word))
+                _colDirection.Items.Add(word);
+        }
+
+        bool loading = _loading;
+        _loading = true;
+        foreach (DataGridViewRow row in _table.Rows)
+        {
+            if (row.Cells[1].Value is string shown && shown.Length > 0)
+                row.Cells[1].Value = Loc.Translate(shown);
+        }
+
+        _loading = loading;
+        foreach (var old in _colDirection.Items.Cast<object>().Where(i => !words.Contains(i)).ToList())
+            _colDirection.Items.Remove(old);
+        _table.Invalidate();
+    }
+
+    /// <summary>A direction as shown in the table, in the current language ("coming" → "geliyor").</summary>
+    private static string Shown(VehicleDirection direction) => Loc.T(direction == VehicleDirection.Coming ? "coming" : "going");
+
+    /// <summary>A car's direction for the list: "coming", or "going? (unclear)" for a guess, in the current language.</summary>
+    private static string DirectionText(PlateCar car) =>
+        car.Direction is not null || car.LikelyMovement is null
+            ? Loc.T(car.Movement)
+            : Loc.T("{0}? ({1})", Loc.T(car.LikelyMovement), Loc.T(car.Movement));
 
     /// <summary>The gap settings for a video never scanned (the scanner's defaults).</summary>
     internal Func<MotionSettings>? GapDefaults { get; set; }
@@ -105,19 +169,20 @@ public sealed partial class VideoEditor : UserControl
     /// <summary>The scan state of the video, shown after its name ("reading plates 40%", "done").</summary>
     internal void ShowTitle(string? scanState)
     {
+        _scanState = scanState;
         if (_video is not { } video)
             return;
 
-        string what = video.LoadError is { } error
-            ? $"  -  its file cannot be read: {error}"
-            : $"  -  {video.Info.Width}x{video.Info.Height}, {PlateMarks.FormatTime(video.Duration)}"
-              + (scanState is null ? "" : $"  -  {scanState}");
-        _title.Text = video.Name + what;
+        _title.Text = video.LoadError is { } error
+            ? Loc.T("{0}  -  its file cannot be read: {1}", video.Name, error)
+            : scanState is null
+                ? Loc.T("{0}  -  {1}x{2}, {3}", video.Name, video.Info.Width, video.Info.Height, PlateMarks.FormatTime(video.Duration))
+                : Loc.T("{0}  -  {1}x{2}, {3}  -  {4}", video.Name, video.Info.Width, video.Info.Height, PlateMarks.FormatTime(video.Duration), Loc.Translate(scanState));
     }
 
     private void ShowNoVideo()
     {
-        _title.Text = "Select a video in the list on the left. Scan finds its gaps, plates and directions.";
+        _title.Text = Loc.T("Select a video in the list on the left. Scan finds its gaps, plates and directions.");
         _summary.Text = "";
         _timeline.SetSource(null, 0);
         _loading = true;
@@ -214,10 +279,10 @@ public sealed partial class VideoEditor : UserControl
         SetValue(_keep, settings.PaddingSeconds);
         _pickGaps.Enabled = video.Scanned && video.CanEdit;
         _gapNote.Text = !video.Scanned
-            ? (video.Motion is null ? "Not scanned yet: Scan finds the gaps (still parts are cut when streaming)." : "Measuring motion...")
+            ? Loc.T(video.Motion is null ? "Not scanned yet: Scan finds the gaps (still parts are cut when streaming)." : "Measuring motion...")
             : video.GapsFromMotion
-                ? $"{video.Skips.Count} gap(s) picked with these settings."
-                : $"{video.Skips.Count} gap(s), changed by hand.";
+                ? Loc.T("{0} gap(s) picked with these settings.", video.Skips.Count)
+                : Loc.T("{0} gap(s), changed by hand.", video.Skips.Count);
     }
 
     private static void SetValue(NumericUpDown box, double value) =>
@@ -231,13 +296,13 @@ public sealed partial class VideoEditor : UserControl
         var settings = new MotionSettings((double)_threshold.Value, (double)_minGap.Value, (double)_keep.Value);
         if (settings.Validate() is { Count: > 0 } problems)
         {
-            MessageBox.Show(this, string.Join("\n", problems), "Pick gaps again", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, string.Join("\n", problems), Loc.T("Pick gaps again"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         if (!video.GapsFromMotion && MessageBox.Show(this,
-                $"The gaps of {video.Name} were changed by hand. Pick them again from the motion data with these settings? Your changes are replaced.",
-                "Pick gaps again", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                Loc.T("The gaps of {0} were changed by hand. Pick them again from the motion data with these settings? Your changes are replaced.", video.Name),
+                Loc.T("Pick gaps again"), MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             return;
 
         if (!CommitCurrent(quiet: false))
@@ -266,7 +331,7 @@ public sealed partial class VideoEditor : UserControl
         int index = _parts.FindIndex(p => p.Contains(seconds, _video.Duration));
         if (index < 0)
         {
-            Status($"{PlateMarks.FormatTime(seconds)} is in a gap: it is not streamed, so it has no labels.");
+            Status(Loc.T("{0} is in a gap: it is not streamed, so it has no labels.", PlateMarks.FormatTime(seconds)));
             return;
         }
 
@@ -304,10 +369,9 @@ public sealed partial class VideoEditor : UserControl
         _wholePicture.Enabled = area.Detection is not null;
         _removePerspective.Enabled = area.Perspective is not null;
 
-        string note = $"Plates are read in {area.Describe()}.";
-        if (_video?.Reading is { } reading && !area.SameAs(reading.DetectionArea, reading.RoadPerspective))
-            note += " The plates shown were read with another area: scan again (Read plates again) to use this one.";
-        _areaNote.Text = note;
+        _areaNote.Text = _video?.Reading is { } reading && !area.SameAs(reading.DetectionArea, reading.RoadPerspective)
+            ? Loc.T("Plates are read in {0}. The plates shown were read with another area: scan again (Read plates again) to use this one.", area.Describe())
+            : Loc.T("Plates are read in {0}.", area.Describe());
     }
 
     /// <summary>A drag on the player ended (or a reset, an undo): the area is saved.</summary>
@@ -365,8 +429,8 @@ public sealed partial class VideoEditor : UserControl
         {
             using var open = new OpenFileDialog
             {
-                Title = "Birel Plaka's camera settings",
-                Filter = $"Birel Plaka camera settings ({BirelCameraSettings.FileName})|{BirelCameraSettings.FileName}|INI files (*.ini)|*.ini",
+                Title = Loc.T("Birel Plaka's camera settings"),
+                Filter = Loc.T("Birel Plaka camera settings ({0})|{0}|INI files (*.ini)|*.ini", BirelCameraSettings.FileName),
                 FileName = BirelCameraSettings.FileName
             };
             if (open.ShowDialog(this) != DialogResult.OK)
@@ -381,13 +445,13 @@ public sealed partial class VideoEditor : UserControl
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            MessageBox.Show(this, ex.Message, "From Birel Plaka", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Loc.T("From Birel Plaka..."), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         _birelSettingsFile = path;
         var menu = new ContextMenuStrip();
-        menu.Items.Add(new ToolStripMenuItem($"Cameras in {path}") { Enabled = false });
+        menu.Items.Add(new ToolStripMenuItem(Loc.T("Cameras in {0}", path)) { Enabled = false });
         menu.Items.Add(new ToolStripSeparator());
         foreach (var camera in cameras)
         {
@@ -397,7 +461,7 @@ public sealed partial class VideoEditor : UserControl
         }
 
         menu.Items.Add(new ToolStripSeparator());
-        var other = new ToolStripMenuItem("Another camera-settings.ini...");
+        var other = new ToolStripMenuItem(Loc.T("Another camera-settings.ini..."));
         other.Click += (_, _) =>
         {
             _birelSettingsFile = null;
@@ -417,7 +481,7 @@ public sealed partial class VideoEditor : UserControl
         }
         catch (FormatException ex)
         {
-            MessageBox.Show(this, $"The area of {camera.Name} cannot be used:\n\n{ex.Message}", "From Birel Plaka",
+            MessageBox.Show(this, Loc.T("The area of {0} cannot be used:\n\n{1}", camera.Name, ex.Message), Loc.T("From Birel Plaka..."),
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
@@ -426,7 +490,7 @@ public sealed partial class VideoEditor : UserControl
         _player.Area = area;
         SaveArea();
         ShowArea();
-        Status($"Took the area of {camera.Name} ({camera.Section}). Birel Plaka keeps them as fractions of the picture, so they fit any size of the same view.");
+        Status(Loc.T("Took the area of {0} ({1}). Birel Plaka keeps them as fractions of the picture, so they fit any size of the same view.", camera.Name, camera.Section));
     }
 
     // ===================================================================== the list of parts
@@ -447,7 +511,7 @@ public sealed partial class VideoEditor : UserControl
                 var item = new ListViewItem(part.Number.ToString());
                 item.SubItems.Add(PlateMarks.FormatTime(part.Start));
                 item.SubItems.Add(PlateMarks.FormatTime(part.End));
-                item.SubItems.Add($"{part.Length:0.0} s");
+                item.SubItems.Add(Loc.T("{0} s", part.Length.ToString("0.0")));
                 item.SubItems.Add(string.Empty);
                 _partList.Items.Add(item);
             }
@@ -476,13 +540,17 @@ public sealed partial class VideoEditor : UserControl
             bool check = video.IsToCheck(_parts[i]);
             if (check)
                 toCheck++;
-            item.SubItems[4].Text = (check ? "to check: " : "") + VehicleLabels.Describe(groups[i]) + (video.Reading is null ? "" : $"   [{read} read]");
+            string described = VehicleLabels.Describe(groups[i]);
+            if (video.Reading is not null)
+                described = Loc.T("{0}   [{1} read]", described, read);
+            item.SubItems[4].Text = check ? Loc.T("to check: {0}", described) : described;
+            item.SubItems[3].Text = Loc.T("{0} s", _parts[i].Length.ToString("0.0"));
             item.ForeColor = !groups[i].IsLabelled ? Color.DarkOrange : check ? Color.RoyalBlue : SystemColors.WindowText;
         }
 
         var summary = VehicleLabels.Summarize(_parts, video.Vehicles, video.EmptyParts, video.Duration);
-        _summary.Text = (video.Scanned ? summary.Describe() : "Not scanned for gaps yet: the whole video is one playing part. " + summary.Describe())
-                        + (toCheck > 0 ? $"; {toCheck} prefilled from the plates, to check" : "") + ".";
+        string text = video.Scanned ? summary.Describe() : Loc.T("Not scanned for gaps yet: the whole video is one playing part. {0}", summary.Describe());
+        _summary.Text = toCheck > 0 ? Loc.T("{0}; {1} prefilled from the plates, to check.", text, toCheck) : text + ".";
         _summary.ForeColor = summary.ToLabel > 0 || toCheck > 0 ? Color.DarkOrange : Color.ForestGreen;
         _deleteOutside.Enabled = video.CanEdit && summary.Outside > 0;
         _previousUnlabelled.Enabled = _nextUnlabelled.Enabled = summary.ToLabel > 0 || toCheck > 0;
@@ -493,7 +561,7 @@ public sealed partial class VideoEditor : UserControl
 
     private void ShowNoParts()
     {
-        _partTitle.Text = "This video has nothing that plays.";
+        _partTitle.Text = Loc.T("This video has nothing that plays.");
         _player.Stop();
         _table.Rows.Clear();
         _table.Enabled = _addVehicle.Enabled = _removeVehicle.Enabled = _noVehicles.Enabled = false;
@@ -552,7 +620,7 @@ public sealed partial class VideoEditor : UserControl
             _table.EndEdit();
             _table.Rows.Clear();
             foreach (var v in group.Vehicles)
-                _table.Rows.Add(PlateMarks.FormatTime(v.Time), v.DirectionText, v.Plate);
+                _table.Rows.Add(PlateMarks.FormatTime(v.Time), Shown(v.Direction), v.Plate);
 
             _noVehicles.Checked = group.Vehicles.Count == 0 && group.MarkedEmpty;
             _noVehicles.Enabled = video.CanEdit && group.Vehicles.Count == 0;
@@ -570,9 +638,10 @@ public sealed partial class VideoEditor : UserControl
             return;
 
         var part = _parts[_current];
-        _partTitle.Text = $"Part {part.Number} of {_parts.Count}: {PlateMarks.FormatTime(part.Start)} to "
-                          + $"{PlateMarks.FormatTime(part.End)} ({part.Length:0.0} s)"
-                          + (video.IsToCheck(part) ? "  -  prefilled from the plates read: check it" : "");
+        _partTitle.Text = Loc.T(video.IsToCheck(part)
+                ? "Part {0} of {1}: {2} to {3} ({4} s)  -  prefilled from the plates read: check it"
+                : "Part {0} of {1}: {2} to {3} ({4} s)",
+            part.Number, _parts.Count, PlateMarks.FormatTime(part.Start), PlateMarks.FormatTime(part.End), part.Length.ToString("0.0"));
     }
 
     /// <summary>
@@ -624,20 +693,20 @@ public sealed partial class VideoEditor : UserControl
 
             if (!PlateMarks.TryParseTime(Cell(0), out double time))
             {
-                problem = $"Row {number}: '{Cell(0)}' is not a time. Use seconds (83.4) or minutes and seconds (1:23.4).";
+                problem = Loc.T("Row {0}: '{1}' is not a time. Use seconds (83.4) or minutes and seconds (1:23.4).", number, Cell(0));
                 return false;
             }
 
             if (!part.Contains(time, video.Duration))
             {
-                problem = $"Row {number}: {PlateMarks.FormatTime(time)} is not in part {part.Number} "
-                          + $"({PlateMarks.FormatTime(part.Start)} to {PlateMarks.FormatTime(part.End)}).";
+                problem = Loc.T("Row {0}: {1} is not in part {2} ({3} to {4}).", number, PlateMarks.FormatTime(time), part.Number,
+                    PlateMarks.FormatTime(part.Start), PlateMarks.FormatTime(part.End));
                 return false;
             }
 
-            if (!VehicleLabels.TryParseDirection(Cell(1), out var direction))
+            if (!VehicleLabels.TryParseDirection(Loc.English(Cell(1)), out var direction))
             {
-                problem = $"Row {number}: choose coming or going.";
+                problem = Loc.T("Row {0}: choose coming or going.", number);
                 return false;
             }
 
@@ -661,7 +730,7 @@ public sealed partial class VideoEditor : UserControl
         if (!TryReadTable(out var rows, out string problem))
         {
             if (quiet)
-                Status(problem + " (not saved until it is fixed)");
+                Status(Loc.T("{0} (not saved until it is fixed)", problem));
             else
                 MessageBox.Show(this, problem, video.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
@@ -710,7 +779,7 @@ public sealed partial class VideoEditor : UserControl
 
         // Values first, then editing: a cell that starts editing before it has its value would save it empty.
         _table.EndEdit();
-        int index = _table.Rows.Add(PlateMarks.FormatTime(time), "coming", string.Empty);
+        int index = _table.Rows.Add(PlateMarks.FormatTime(time), Shown(VehicleDirection.Coming), string.Empty);
         _noVehicles.Checked = false;
         CommitCurrent(quiet: true);
         _table.CurrentCell = _table.Rows[index].Cells[2];
@@ -782,17 +851,18 @@ public sealed partial class VideoEditor : UserControl
                 _used.Add(car);
 
             _carsTitle.Text = video?.Reading is null
-                ? "No plates read yet: Scan (on the left) reads them in every playing part."
+                ? Loc.T("No plates read yet: Scan (on the left) reads them in every playing part.")
                 : _partCars.Count == 0
-                    ? "No plates were read in this part" + (video.Reading.Parts.Any(p => _current >= 0 && Math.Abs(p.Start - _parts[_current].Start) < 0.01) ? "." : " (not read yet).")
-                    : $"{_partCars.Count} car(s) read in this part. Check the reading in the player, then add it as a vehicle.";
+                    ? Loc.T(video.Reading.Parts.Any(p => _current >= 0 && Math.Abs(p.Start - _parts[_current].Start) < 0.01)
+                        ? "No plates were read in this part." : "No plates were read in this part (not read yet).")
+                    : Loc.T("{0} car(s) read in this part. Check the reading in the player, then add it as a vehicle.", _partCars.Count);
 
             for (int i = 0; i < _partCars.Count; i++)
             {
                 var car = _partCars[i];
                 _plateImages.Images.Add(Thumbnail(car.PlateJpeg));
                 var item = new ListViewItem(car.Decided ? car.Plate : car.Plate + " ?", i);
-                item.SubItems.Add(car.DirectionText);
+                item.SubItems.Add(DirectionText(car));
                 item.SubItems.Add(PlateMarks.FormatTime(car.Time));
                 item.SubItems.Add(car.Reads.ToString());
                 item.SubItems.Add(Result(car));
@@ -827,9 +897,12 @@ public sealed partial class VideoEditor : UserControl
         _colCarResult.Width = Math.Max(120, _cars.ClientSize.Width - others - 4);
     }
 
-    private string Result(PlateCar car) =>
-        (_used.Contains(car) ? "added; " : "")
-        + (car.Decided ? $"decided ({car.Votes} reads agree)" : car.Reason ?? "not decided");
+    private string Result(PlateCar car)
+    {
+        // Reasons are saved in English with the reading; shown in the current language.
+        string result = car.Decided ? Loc.T("decided ({0} reads agree)", car.Votes) : car.Reason is { } reason ? Loc.Translate(reason) : Loc.T("not decided");
+        return _used.Contains(car) ? Loc.T("added; {0}", result) : result;
+    }
 
     /// <summary>The plate crop fitted into the list's picture size, on white.</summary>
     private Image Thumbnail(byte[]? jpeg)
@@ -915,14 +988,14 @@ public sealed partial class VideoEditor : UserControl
 
         if (_table.CurrentRow is not { } row || row.IsNewRow)
         {
-            MessageBox.Show(this, "Select a vehicle in the table above first.", _video?.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, Loc.T("Select a vehicle in the table above first."), _video?.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         _table.EndEdit();
         row.Cells[2].Value = SelectedReading(car);
         if (string.IsNullOrEmpty(row.Cells[1].Value as string) && car.MostLikelyDirection is { } direction)
-            row.Cells[1].Value = direction == VehicleDirection.Coming ? "coming" : "going";
+            row.Cells[1].Value = Shown(direction);
         MarkUsed(car);
         CommitCurrent(quiet: true);
     }
@@ -942,8 +1015,8 @@ public sealed partial class VideoEditor : UserControl
         _table.EndEdit();
         string? direction = car.MostLikelyDirection switch
         {
-            VehicleDirection.Coming => "coming",
-            VehicleDirection.Going => "going",
+            VehicleDirection.Coming => Shown(VehicleDirection.Coming),
+            VehicleDirection.Going => Shown(VehicleDirection.Going),
             _ => null
         };
 
@@ -964,7 +1037,7 @@ public sealed partial class VideoEditor : UserControl
         if (missing is not null)
         {
             _table.CurrentCell = missing.Cells[1];
-            Status("Nothing tells the direction of a vehicle: choose coming or going in the table (it is saved then).");
+            Status(Loc.T("Nothing tells the direction of a vehicle: choose coming or going in the table (it is saved then)."));
         }
         else
         {
@@ -1016,7 +1089,7 @@ public sealed partial class VideoEditor : UserControl
             }
         }
 
-        MessageBox.Show(this, video.ToCheckCount > 0 ? "Every other playing part is labelled and checked." : "Every playing part is labelled.",
+        MessageBox.Show(this, Loc.T(video.ToCheckCount > 0 ? "Every other playing part is labelled and checked." : "Every playing part is labelled."),
             video.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
@@ -1031,7 +1104,7 @@ public sealed partial class VideoEditor : UserControl
         if (count == 0)
             return;
 
-        if (MessageBox.Show(this, $"{count} label(s) are in gaps now, so they are never streamed. Delete them?",
+        if (MessageBox.Show(this, Loc.T("{0} label(s) are in gaps now, so they are never streamed. Delete them?", count),
                 video.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             return;
 
@@ -1058,8 +1131,8 @@ public sealed partial class VideoEditor : UserControl
         {
             using var dialog = new SaveFileDialog
             {
-                Title = $"Export labels of {video.Name}",
-                Filter = "CSV files (*.csv)|*.csv",
+                Title = Loc.T("Export labels of {0}", video.Name),
+                Filter = Loc.T("CSV files (*.csv)|*.csv"),
                 FileName = Path.GetFileNameWithoutExtension(video.Name) + "-labels.csv"
             };
 
@@ -1068,7 +1141,7 @@ public sealed partial class VideoEditor : UserControl
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(this, ex.Message, "Export labels", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Loc.T("Export labels"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

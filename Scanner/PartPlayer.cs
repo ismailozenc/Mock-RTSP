@@ -156,7 +156,7 @@ public sealed class PartPlayer : Control
         _height = Math.Max(2, height / 2 * 2);
 
         _message = ffmpegPath is null || !File.Exists(ffmpegPath)
-            ? "The video cannot be shown here: ffmpeg.exe was not found (see Requirements in the README)."
+            ? Loc.T("The video cannot be shown here: ffmpeg.exe was not found (see Requirements in the README).")
             : null;
         Invalidate();
     }
@@ -236,7 +236,7 @@ public sealed class PartPlayer : Control
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            _message = "The video cannot be shown: " + ex.Message;
+            _message = Loc.T("The video cannot be shown: {0}", ex.Message);
             Invalidate();
             return;
         }
@@ -245,7 +245,7 @@ public sealed class PartPlayer : Control
         if (_decoder.Frames.TryTake(out var first, 3000))
             Show(first);
         else if (_decoder.Error is { } error)
-            _message = "FFmpeg could not decode this part: " + error;
+            _message = Loc.T("FFmpeg could not decode this part: {0}", error);
 
         _nextDue = _clock.Elapsed.TotalSeconds + 1 / FrameRate / Speed;
         _timer.Start();
@@ -273,7 +273,7 @@ public sealed class PartPlayer : Control
             // End of the part.
             if (_decoder.Error is { } error && _pictureTime is null)
             {
-                _message = "FFmpeg could not decode this part: " + error;
+                _message = Loc.T("FFmpeg could not decode this part: {0}", error);
                 StopDecoder();
                 Invalidate();
             }
@@ -312,7 +312,7 @@ public sealed class PartPlayer : Control
         }
 
         _pictureTime = frame.Time;
-        _time.Text = $"{PlateMarks.FormatTime(frame.Time)}   (part {PlateMarks.FormatTime(_start)} to {PlateMarks.FormatTime(_end)})";
+        _time.Text = Loc.T("{0}   (part {1} to {2})", PlateMarks.FormatTime(frame.Time), PlateMarks.FormatTime(_start), PlateMarks.FormatTime(_end));
         Invalidate(VideoArea);
         Invalidate(ProgressArea);
         PositionChanged?.Invoke(this, EventArgs.Empty);
@@ -320,7 +320,7 @@ public sealed class PartPlayer : Control
 
     private void UpdateButtons()
     {
-        _playPause.Text = _paused ? "Play" : "Pause";
+        _playPause.Text = Loc.T(_paused ? "Play" : "Pause");
         bool usable = _message is null && _file is not null;
         _playPause.Enabled = _frameBack.Enabled = _frameForward.Enabled = _toStart.Enabled = usable;
     }
@@ -368,7 +368,7 @@ public sealed class PartPlayer : Control
 
             if (_message is not null || _picture is null)
             {
-                string text = _message ?? (_file is null ? "Select a playing part to see it here." : "Loading the video...");
+                string text = _message is not null ? Loc.Translate(_message) : Loc.T(_file is null ? "Select a playing part to see it here." : "Loading the video...");
                 TextRenderer.DrawText(g, text, Font, area, Color.Gray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
             }
@@ -381,7 +381,7 @@ public sealed class PartPlayer : Control
 
                 if (_zoom > 1.01)
                 {
-                    string zoom = $"zoom {_zoom:0.#}x  (double-click: whole picture)";
+                    string zoom = Loc.T("zoom {0}x  (double-click: whole picture)", _zoom.ToString("0.#"));
                     var size = TextRenderer.MeasureText(zoom, Font);
                     var box = new Rectangle(area.Left + 6, area.Top + 6, size.Width + 6, size.Height + 2);
                     using var back = new SolidBrush(Color.FromArgb(170, 0, 0, 0));
@@ -690,13 +690,11 @@ public sealed class PartPlayer : Control
         }
 
         if (_editing == AreaEdit.Detection)
-            DrawHint(g, _area.Detection is null
+            DrawHint(g, Loc.T(_area.Detection is null
                 ? "Detection area: drag over the picture to draw it (now the whole picture is read). Esc: undo. R: done."
-                : "Detection area: drag its edges or corners, drag inside to move it, drag outside it to draw a new one. "
-                  + "Right-click: whole picture. Esc: undo. R: done.");
+                : "Detection area: drag its edges or corners, drag inside to move it, drag outside it to draw a new one. Right-click: whole picture. Esc: undo. R: done."));
         else if (_editing == AreaEdit.Perspective)
-            DrawHint(g, "Road perspective: drag the 4 corners onto the lane edges (a rectangle lying on the road). "
-                        + "Drag inside to move it. Right-click: reset. Esc: undo. P: done.");
+            DrawHint(g, Loc.T("Road perspective: drag the 4 corners onto the lane edges (a rectangle lying on the road). Drag inside to move it. Right-click: reset. Esc: undo. P: done."));
     }
 
     private void DrawPerspective(Graphics g)
@@ -729,8 +727,8 @@ public sealed class PartPlayer : Control
         foreach (var c in shown)
             g.FillEllipse(Brushes.Gold, c.X - 5, c.Y - 5, 10, 10);
 
-        DrawLabel(g, "far", Middle(shown[RoadPerspective.FarLeft], shown[RoadPerspective.FarRight]), above: true);
-        DrawLabel(g, "near", Middle(shown[RoadPerspective.NearRight], shown[RoadPerspective.NearLeft]), above: false);
+        DrawLabel(g, Loc.T("far"), Middle(shown[RoadPerspective.FarLeft], shown[RoadPerspective.FarRight]), above: true);
+        DrawLabel(g, Loc.T("near"), Middle(shown[RoadPerspective.NearRight], shown[RoadPerspective.NearLeft]), above: false);
     }
 
     private static PointF Middle(PointF a, PointF b) => new((a.X + b.X) / 2, (a.Y + b.Y) / 2);

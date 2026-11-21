@@ -300,7 +300,7 @@ internal sealed class ScanVideo : IDisposable
     public string Prefill()
     {
         if (Reading is null)
-            return "No plates read yet.";
+            return Loc.T("No plates read yet.");
 
         int parts = 0, vehicles = 0, unknown = 0;
         foreach (var part in Parts)
@@ -326,9 +326,9 @@ internal sealed class ScanVideo : IDisposable
         }
 
         string done = parts == 0
-            ? "No part without labels could be prefilled."
-            : $"Prefilled {parts} part(s) with {vehicles} vehicle(s) (most likely plate and direction): check them with Next to label.";
-        return unknown == 0 ? done : done + $" {unknown} part(s) left to label: nothing tells a car's direction there.";
+            ? Loc.T("No part without labels could be prefilled.")
+            : Loc.T("Prefilled {0} part(s) with {1} vehicle(s) (most likely plate and direction): check them with Next to label.", parts, vehicles);
+        return unknown == 0 ? done : done + " " + Loc.T("{0} part(s) left to label: nothing tells a car's direction there.", unknown);
     }
 
     /// <summary>
@@ -349,14 +349,14 @@ internal sealed class ScanVideo : IDisposable
         if (cars.Count == 0)
             return null;
         if (cars.Any(c => c.MostLikelyDirection is null))
-            return $"part {part.Number}: nothing tells a car's direction, left to label";
+            return Loc.T("part {0}: nothing tells a car's direction, left to label", part.Number);
 
         foreach (var car in cars)
             _vehicles.Add(new VehicleMark(Math.Round(car.Time, 3), car.MostLikelyDirection!.Value, car.Plate));
         _vehicles = VehicleLabels.Normalize(_vehicles, Duration);
         _toCheck.Add(Math.Round(part.Middle, 3));
         added = cars.Count;
-        return $"part {part.Number} prefilled with {cars.Count} vehicle(s)";
+        return Loc.T("part {0} prefilled with {1} vehicle(s)", part.Number, cars.Count);
     }
 
     /// <summary>A reading that ended (finished or stopped): saved as it is.</summary>

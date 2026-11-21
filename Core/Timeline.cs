@@ -350,7 +350,7 @@ public sealed class Timeline : Control
 
             if (_duration <= 0)
             {
-                TextRenderer.DrawText(g, "Select a camera to see its timeline.", Font, ClientRectangle, Color.Gray,
+                TextRenderer.DrawText(g, Loc.T("Select a camera to see its timeline."), Font, ClientRectangle, Color.Gray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 return;
             }
@@ -367,7 +367,7 @@ public sealed class Timeline : Control
             DrawStatus(g);
 
             if (_pendingStart is double pending)
-                DrawMarker(g, TimeToX(pending), Color.Orange, "skip from " + FormatPrecise(pending), true);
+                DrawMarker(g, TimeToX(pending), Color.Orange, Loc.T("skip from {0}", FormatPrecise(pending)), true);
 
             if (_hoverX >= 0 && _drag == DragMode.None)
                 DrawMarker(g, _hoverX, Color.FromArgb(150, 255, 255, 255), null, false);
@@ -509,7 +509,7 @@ public sealed class Timeline : Control
 
             if (!group.IsLabelled || (group.MarkedEmpty && group.Vehicles.Count == 0))
             {
-                string text = group.IsLabelled ? "none" : $"#{group.Part.Number} ?";
+                string text = group.IsLabelled ? Loc.T("none") : $"#{group.Part.Number} ?";
                 if (TextRenderer.MeasureText(text, small).Width + 4 > inner.Width)
                     text = group.IsLabelled ? string.Empty : "?";
                 TextRenderer.DrawText(g, text, small, inner, group.IsLabelled ? Color.Gray : Color.Gold,
@@ -538,7 +538,7 @@ public sealed class Timeline : Control
 
             int nComing = group.Vehicles.Count(v => v.Direction == VehicleDirection.Coming);
             int nGoing = group.Vehicles.Count - nComing;
-            string counts = $"{nComing} coming, {nGoing} going";
+            string counts = Loc.T("{0} coming, {1} going", nComing, nGoing);
             if (TextRenderer.MeasureText(counts, small).Width + 4 <= inner.Width)
             {
                 TextRenderer.DrawText(g, counts, small, inner, Color.Gainsboro,
@@ -575,7 +575,7 @@ public sealed class Timeline : Control
             g.FillRectangle(fill, rect);
 
             if (rect.Width > 56)
-                TextRenderer.DrawText(g, $"skip {range.Length:0.0} s", Font, new Rectangle(rect.Left + 6, rect.Top + 1, rect.Width - 10, Font.Height + 2),
+                TextRenderer.DrawText(g, Loc.T("skip {0} s", range.Length.ToString("0.0")), Font, new Rectangle(rect.Left + 6, rect.Top + 1, rect.Width - 10, Font.Height + 2),
                     Color.FromArgb(255, 150, 150), TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.EndEllipsis);
         }
     }
@@ -702,9 +702,9 @@ public sealed class Timeline : Control
     private void DrawStatus(Graphics g)
     {
         string? text = _scanProgress is double progress
-            ? $"Scanning motion {progress * 100:0}%"
+            ? Loc.T("Scanning motion {0}%", (progress * 100).ToString("0"))
             : _strip is { IsComplete: false, Error: null }
-                ? $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%"
+                ? Loc.T("Making previews {0}%", 100 * _strip.Count / Math.Max(1, _strip.ExpectedCount))
                 : null;
         var color = Color.Khaki;
 
@@ -712,8 +712,8 @@ public sealed class Timeline : Control
         if (text is null)
         {
             var summary = VehicleLabels.Summarize(_skips, _vehicles, _emptyParts, _duration);
-            text = $"{summary.Parts} part{(summary.Parts == 1 ? "" : "s")}, {summary.Labelled} labelled"
-                   + (summary.Vehicles > 0 ? $", {summary.Vehicles} vehicle{(summary.Vehicles == 1 ? "" : "s")}" : string.Empty);
+            text = Loc.T(summary.Parts == 1 ? "{0} part, {1} labelled" : "{0} parts, {1} labelled", summary.Parts, summary.Labelled)
+                   + (summary.Vehicles > 0 ? Loc.T(summary.Vehicles == 1 ? ", {0} vehicle" : ", {0} vehicles", summary.Vehicles) : string.Empty);
             color = summary.ToLabel > 0 ? Color.FromArgb(240, 170, 60) : Color.FromArgb(120, 210, 120);
         }
 
@@ -760,22 +760,22 @@ public sealed class Timeline : Control
             return;
 
         int index = _skips.FindIndex(r => r.Contains(seconds));
-        string caption = FormatPrecise(seconds) + (index >= 0 ? "  (skipped)" : string.Empty);
+        string caption = FormatPrecise(seconds) + (index >= 0 ? Loc.T("  (skipped)") : string.Empty);
 
         // Plates within a few pixels of the mouse.
         double near = Math.Max(0.3, 6 / Math.Max(_pixelsPerSecond, 0.0001));
         var plates = _plates.Where(p => Math.Abs(p.Time - seconds) <= near).Select(p => p.Plate).ToList();
         if (plates.Count > 0)
-            caption += "  plate " + string.Join(", ", plates);
+            caption += Loc.T("  plate {0}", string.Join(", ", plates));
 
         if (index < 0 && LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
-            caption += $"  part {group.Part.Number}: {VehicleLabels.Describe(group)}";
+            caption += Loc.T("  part {0}: {1}", group.Part.Number, VehicleLabels.Describe(group));
 
         Bitmap? image = BitmapFor(seconds);
         string? note = image is not null ? null
-            : _strip is null ? "No preview"
-            : _strip.Error is not null ? "No preview: " + _strip.Error
-            : $"Making previews {100 * _strip.Count / Math.Max(1, _strip.ExpectedCount)}%";
+            : _strip is null ? Loc.T("No preview")
+            : _strip.Error is not null ? Loc.T("No preview: {0}", _strip.Error)
+            : Loc.T("Making previews {0}%", 100 * _strip.Count / Math.Max(1, _strip.ExpectedCount));
 
         var imageSize = _strip is null ? new Size(192, 108) : new Size(_strip.Width, _strip.Height);
         _preview.SetContent(image, imageSize, caption, note, index >= 0);
@@ -988,7 +988,7 @@ public sealed class Timeline : Control
 
         if (LabelPartRequested is not null && LabelGroups().FirstOrDefault(gr => gr.Part.Contains(seconds, _duration)) is { } group)
         {
-            menu.Items.Add($"Label part {group.Part.Number} ({VehicleLabels.Describe(group)})...", null,
+            menu.Items.Add(Loc.T("Label part {0} ({1})...", group.Part.Number, VehicleLabels.Describe(group)), null,
                 (_, _) => LabelPartRequested?.Invoke(this, seconds));
             if (EditSkips)
                 menu.Items.Add(new ToolStripSeparator());
@@ -1001,18 +1001,18 @@ public sealed class Timeline : Control
         else if (index >= 0)
         {
             var range = _skips[index];
-            menu.Items.Add($"Delete skip {FormatPrecise(range.Start)} - {FormatPrecise(range.End)}", null,
+            menu.Items.Add(Loc.T("Delete skip {0} - {1}", FormatPrecise(range.Start), FormatPrecise(range.End)), null,
                 (_, _) => ReplaceSkips(_skips.Where((_, i) => i != index).ToList()));
         }
         else
         {
-            menu.Items.Add($"Add a 5 s skip at {FormatPrecise(seconds)}", null,
+            menu.Items.Add(Loc.T("Add a 5 s skip at {0}", FormatPrecise(seconds)), null,
                 (_, _) => ReplaceSkips(_skips.Append(new SkipRange(seconds, Math.Min(_duration, seconds + 5))).ToList()));
         }
 
         if (EditSkips)
         {
-            var clear = menu.Items.Add("Clear all skips", null, (_, _) => ReplaceSkips(new List<SkipRange>()));
+            var clear = menu.Items.Add(Loc.T("Clear all skips"), null, (_, _) => ReplaceSkips(new List<SkipRange>()));
             clear.Enabled = _skips.Count > 0;
         }
 

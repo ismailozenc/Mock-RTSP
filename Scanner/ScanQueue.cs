@@ -26,7 +26,8 @@ internal sealed class ScanJob
     /// <summary>0 to 1 within the step.</summary>
     public double Progress { get; set; }
 
-    public string Status { get; set; } = "waiting";
+    /// <summary>For the list, in the language at the time (the list translates it again when the language changes).</summary>
+    public string Status { get; set; } = Loc.T("waiting");
 }
 
 /// <summary>
@@ -80,7 +81,7 @@ internal sealed class ScanQueue : IDisposable
     public void Add(ScanVideo video, bool gapsAgain, bool platesAgain)
     {
         if (!video.CanEdit)
-            throw new InvalidOperationException($"{video.Name}: its file cannot be read ({video.LoadError}). Fix or delete the file, then open the folder again.");
+            throw new InvalidOperationException(Loc.T("{0}: its file cannot be read ({1}). Fix or delete the file, then open the folder again.", video.Name, video.LoadError));
         if (Current?.Video == video || _waiting.Any(j => j.Video == video))
             return;
 
@@ -104,7 +105,7 @@ internal sealed class ScanQueue : IDisposable
         foreach (var job in _waiting)
         {
             job.Step = ScanStep.Stopped;
-            job.Status = "not scanned (stopped)";
+            job.Status = Loc.T("not scanned (stopped)");
             _finished.Add(job);
         }
 
@@ -134,13 +135,13 @@ internal sealed class ScanQueue : IDisposable
                 catch (OperationCanceledException)
                 {
                     job.Step = ScanStep.Stopped;
-                    job.Status = "stopped; what was found so far is kept";
+                    job.Status = Loc.T("stopped; what was found so far is kept");
                     Say($"{job.Video.Name}: scan stopped; what was found so far is kept.");
                 }
                 catch (Exception ex)
                 {
                     job.Step = ScanStep.Failed;
-                    job.Status = "failed: " + ex.Message.Split('\n')[0];
+                    job.Status = Loc.T("failed: {0}", ex.Message.Split('\n')[0]);
                     ErrorReporter.Report(ex, $"Scanning {job.Video.Path}");
                     Say($"ERROR: {job.Video.Name}: the scan failed: {ex.Message}");
                 }
@@ -168,7 +169,7 @@ internal sealed class ScanQueue : IDisposable
         if (job.GapsAgain || !video.Scanned)
         {
             job.Step = ScanStep.Gaps;
-            job.Status = "finding gaps";
+            job.Status = Loc.T("finding gaps");
             StateChanged?.Invoke(this, EventArgs.Empty);
             Say($"{video.Name}: finding the gaps (measuring motion)...");
 
@@ -178,13 +179,13 @@ internal sealed class ScanQueue : IDisposable
                 {
                     await Task.Delay(250, cancel);
                     job.Progress = scan.Progress;
-                    job.Status = $"finding gaps {scan.Progress * 100:0}%";
+                    job.Status = Loc.T("finding gaps {0}%", (scan.Progress * 100).ToString("0"));
                     video.ShowLiveMotion(scan.SoFar);
                     StateChanged?.Invoke(this, EventArgs.Empty);
                 }
 
                 if (scan.Result is not { } motion)
-                    throw new InvalidOperationException("the motion scan failed: " + scan.Error);
+                    throw new InvalidOperationException(Loc.T("the motion scan failed: {0}", scan.Error));
                 video.SetMotion(motion, video.MotionSettings ?? _gapDefaults());
             }
         }
@@ -196,7 +197,7 @@ internal sealed class ScanQueue : IDisposable
             var area = video.ReadArea;
             job.Step = ScanStep.Plates;
             job.Progress = 0;
-            job.Status = "reading plates";
+            job.Status = Loc.T("reading plates");
             StateChanged?.Invoke(this, EventArgs.Empty);
             Say($"{video.Name}: reading the plates of {parts.Count} playing part(s) in {area.Describe()}...");
 
@@ -219,7 +220,7 @@ internal sealed class ScanQueue : IDisposable
                         Post(() =>
                         {
                             job.Progress = share;
-                            job.Status = $"reading plates {share * 100:0}%: {message}";
+                            job.Status = Loc.T("reading plates {0}%: {1}", (share * 100).ToString("0"), message);
                             StateChanged?.Invoke(this, EventArgs.Empty);
                         });
                     },
@@ -242,7 +243,7 @@ internal sealed class ScanQueue : IDisposable
 
     /// <summary>For the list: what a video has, after its scan.</summary>
     public static string Describe(ScanVideo video) =>
-        video.Reading is { } r ? $"done: {r.Cars.Count} car(s) read" : video.Scanned ? "done: gaps found" : "not scanned";
+        video.Reading is { } r ? Loc.T("done: {0} car(s) read", r.Cars.Count) : Loc.T(video.Scanned ? "done: gaps found" : "not scanned");
 
     private void Post(Action action)
     {

@@ -17,6 +17,8 @@ public sealed partial class ScannerForm
     private Button _browse = null!;
     private Button _refresh = null!;
     private Label _folderInfo = null!;
+    private Label _lblLanguage = null!;
+    private ComboBox _language = null!;
     private TableLayoutPanel _left = null!;
     private ListView _videos = null!;
     private ColumnHeader _colName = null!;
@@ -64,6 +66,8 @@ public sealed partial class ScannerForm
         _browse = new Button();
         _refresh = new Button();
         _folderInfo = new Label();
+        _lblLanguage = new Label();
+        _language = new ComboBox();
         _left = new TableLayoutPanel();
         _videos = new ListView();
         _colName = new ColumnHeader();
@@ -106,7 +110,7 @@ public sealed partial class ScannerForm
         _lblFolder.AutoSize = true;
         _lblFolder.Margin = new Padding(0, 7, 3, 3);
         _lblFolder.Text = "Video folder:";
-        _folder.Width = 520;
+        _folder.Width = 440;
         _browse.AutoSize = true;
         _browse.Text = "Browse...";
         _refresh.AutoSize = true;
@@ -115,6 +119,12 @@ public sealed partial class ScannerForm
         _folderInfo.ForeColor = SystemColors.GrayText;
         _folderInfo.Margin = new Padding(8, 7, 3, 3);
         _folderInfo.Text = "";
+        _lblLanguage.AutoSize = true;
+        _lblLanguage.Margin = new Padding(24, 7, 3, 3);
+        _lblLanguage.Text = "Language:";
+        _language.DropDownStyle = ComboBoxStyle.DropDownList;   // English / Türkçe, never typed
+        _language.Items.AddRange(new object[] { "English", "Türkçe" });
+        _language.Width = 100;
 
         _folderRow.AutoSize = true;
         _folderRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -126,20 +136,22 @@ public sealed partial class ScannerForm
         _folderRow.Controls.Add(_browse);
         _folderRow.Controls.Add(_refresh);
         _folderRow.Controls.Add(_folderInfo);
+        _folderRow.Controls.Add(_lblLanguage);
+        _folderRow.Controls.Add(_language);
 
         // ================= Videos and the queue =================
         _colName.Text = "Video";
-        _colName.Width = 140;
+        _colName.Width = 120;
         _colLength.Text = "Length";
-        _colLength.Width = 52;
+        _colLength.Width = 50;
         _colGaps.Text = "Gaps";
-        _colGaps.Width = 52;
+        _colGaps.Width = 68;
         _colPlates.Text = "Plates read";
-        _colPlates.Width = 74;
+        _colPlates.Width = 100;
         _colLabels.Text = "Labelled";
-        _colLabels.Width = 104;
+        _colLabels.Width = 124;
         _colScan.Text = "Scan";
-        _colScan.Width = 170;
+        _colScan.Width = 150;
 
         _videos.Columns.AddRange(new ColumnHeader[] { _colName, _colLength, _colGaps, _colPlates, _colLabels, _colScan });
         _videos.Dock = DockStyle.Fill;
@@ -245,7 +257,7 @@ public sealed partial class ScannerForm
 
         // ================= Grid =================
         _grid.ColumnCount = 2;
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 580F));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 624F));
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         _grid.Dock = DockStyle.Fill;
         _grid.Padding = new Padding(10);
@@ -278,6 +290,7 @@ public sealed partial class ScannerForm
         _defMinGap.ValueChanged += new EventHandler(OnOptionChanged);
         _defKeep.ValueChanged += new EventHandler(OnOptionChanged);
         _timer.Tick += new EventHandler(OnTimerTick);
+        _language.SelectedIndexChanged += new EventHandler(OnLanguageChanged);
 
         // ================= Form =================
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)

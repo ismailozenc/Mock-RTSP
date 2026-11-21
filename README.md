@@ -69,6 +69,8 @@ The numbers come from MediaMTX's control API, which the app turns on for this co
 
 Run `MockRtspScanner.exe` and choose the **Video folder** (Browse, a recent folder, or type it and press Enter). Only one scanner runs at a time.
 
+**Language**: English or Türkçe (Turkish), with **Language** at the top right. The whole window changes at once, the editor, the lists, the timeline and the player's hints included, and the choice is kept; the first run follows the language of Windows. What is saved stays the same in both (directions are saved as `coming`/`going`, CSV exports are in English), and so are the log lines. The RTSP app only serves, so it has no language setting and stays in English.
+
 **The videos** of the folder are listed on the left with their length, **Gaps** (how many, "none", or "not scanned"), **Plates read** (cars found), **Labelled** (labelled parts of all playing parts, and how many are still to check) and **Scan** (waiting, finding gaps 40%, reading plates 55%: part 2 of 5, done, stopped or failed). Hover a row for the whole text.
 
 **The queue.** **Scan selected** queues the selected videos, **Scan all not scanned** queues every video whose gaps or plates are missing. They are scanned one after another:
@@ -201,7 +203,7 @@ The last 10 video folders are remembered in the dropdown next to **Video folder*
 
 MediaMTX ends with the app, however the app ends (closed, crashed, or stopped from the debugger). When the server starts, any `mediamtx.exe` still left over from an earlier run of Mock RTSP (from this program folder or any other Mock RTSP build) is stopped first; other MediaMTX installations are left alone. If the port is still taken, the message names the MediaMTX processes running.
 
-The scanner keeps its folder, recent folders, the gap settings for new videos and the two "again" ticks in `%APPDATA%\MockRtsp\scanner.json`.
+The scanner keeps its language, folder, recent folders, the gap settings for new videos and the two "again" ticks in `%APPDATA%\MockRtsp\scanner.json`.
 
 Errors are shown in a dialog and in the log. Unexpected errors (from both apps) are also written to `%LOCALAPPDATA%\MockRtsp\errors.log`.
 
@@ -283,7 +285,7 @@ PlatesDialog (ground-truth plates of a video)
 | File | Where | Written by | Contents |
 |---|---|---|---|
 | `options.json` | `%APPDATA%\MockRtsp\` | OptionsStore (RTSP app) | Defaults for videos, server settings (logins in plain text), last folder, recent folders, last project, reopen-at-startup flag |
-| `scanner.json` | `%APPDATA%\MockRtsp\` | ScannerOptions (scanner) | Folder, recent folders, gap settings for new videos (gapThresholdPercent, minGapSeconds, keepAroundSeconds), GapsAgain, PlatesAgain |
+| `scanner.json` | `%APPDATA%\MockRtsp\` | ScannerOptions (scanner) | Language (`en`/`tr`; empty until chosen), folder, recent folders, gap settings for new videos (gapThresholdPercent, minGapSeconds, keepAroundSeconds), GapsAgain, PlatesAgain |
 | `errors.log` | `%LOCALAPPDATA%\MockRtsp\` | ErrorReporter | Unexpected exceptions with context |
 | `<video>.mockrtsp.json` | next to each video | VideoSidecar (both apps, each its own keys) | `settings` (the RTSP app: the video's own stream settings, or none). The scanner: `skips` (the gaps), `motion` (interval and levels, base64), `motionSettings` (thresholdPercent, minStillSeconds, paddingSeconds: what picked the gaps), `plates` (ground truth: time, plate, optional region), `vehicles` (time, `coming`/`going`, optional plate), `emptyParts` (moments in parts checked as having no vehicles), `detectionArea` (`"x,y,width,height"`) and `roadPerspective` (`"x,y;x,y;x,y;x,y"`, far-left, far-right, near-right, near-left), fractions of the picture in Birel Plaka's `Roi=` / `Perspective=` format, left out for the whole picture / no perspective. Every save reads the file, replaces the writer's keys and writes it back atomically, under a named mutex per video (`MockRtsp.Sidecar.<hash of the path>`), so the two apps never lose each other's changes. A damaged file is never overwritten (InvalidDataException). Deleted when there is nothing to keep. Older files: `<video>.skips.json` and motion settings inside `settings` are read and converted on the first save |
 | `<video>.mockrtsp.plates.json` | next to each video | PlateScanFile | The last plate reading (Read plates in every part): when, the model files, the interval, the detection area and road perspective it used (same format as above), the parts read (start, end, pictures) and the cars: start, end, time, decided, plate, reason, movement (Birel Plaka's estimate), likelyMovement (the guess when that is neither coming nor going, or none), reads, votes, agreement, readings (text, count, best OCR, best detection) and the plate and car pictures as base64 JPEGs; `toCheck`: moments in parts prefilled from it and not looked at yet. Written only by the scanner: when a reading starts, after each part, and when the parts to check change. Atomic save. A damaged file is reported in the log and replaced by the next reading |
@@ -342,6 +344,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 - **`VehicleLabels.cs`**: vehicle labels per playing part.
   - `enum VehicleDirection` (Coming, Going); `record VehicleMark(Time, Direction, Plate)`; `record PlayingPart(Number, Start, End)` with `Contains` (end exclusive, except the end of the video); `record PartLabels(Part, Vehicles, MarkedEmpty)` with `IsLabelled`; `record LabelSummary(Parts, Labelled, Vehicles, Coming, Going, Outside)` with `ToLabel` and `Describe`.
   - `VehicleLabels`: `PlayingParts(skips, duration)` (the video minus its skips; the whole video when there are none, or when they would leave nothing to play), `Group`, `CountOutside`, `Summarize`, `Describe(part)`, `Normalize`, `NormalizeEmpty`, `TryParseDirection` and `ToCsv`.
+- **`Localization.cs`**: `Loc`, English and Turkish for the scanner and the shared controls it shows (taken from v3's language switch and rebuilt for the scanner; the RTSP app never sets it, so it stays English). English is the key: `T(english, args)` for text made at run time, `Translate(text)` for a text in either language (also a filled-in template such as "3 gap(s) picked with these settings.", matched by patterns made from the table's `{0}` texts, with the filled-in parts translated too, so texts made earlier and the reasons saved in English with a reading follow a change of language), `English(text)` back to the key, `Apply(control)` re-texts a window (controls, list and grid column headers; text boxes, combo boxes and number boxes are data and left alone). `Set`, `FromWindows`, `Parse`/`Code` (`en`/`tr`), `Names` for the combobox. Static fields are set in written order: the placeholder pattern before the templates that use it.
 - **`ReadArea.cs`**: where plates are read in a video. `ReadArea(Detection, Perspective)`: the detection area (a RectangleF of fractions, null = whole picture) and road perspective (four corners, null = none), checked when made (inside the picture; a convex shape by `RoadPerspective.IsValidShape`). Text in Birel Plaka's RoiSettings format (`FormatDetection`, `ParseDetection`, `FormatPerspective`, `ParsePerspective`, `Parse`); `DetectionPixels` and `PerspectivePixels` turn them into frame pixels like Birel Plaka's StreamTile (`GetFrameRoi`, `GetFramePerspective`); `SameAs` compares with saved texts; `Describe` for the dialog. `BirelCameraSettings.Read` reads the `[Camera_N]` sections (Name, Url, Roi, Perspective) of Birel Plaka's `camera-settings.ini` (read only); `BirelCamera.ToReadArea` clips a Roi reaching outside the picture as Birel Plaka does.
 - **`Timeline.cs`**: custom control for one video, in both apps.
   - Ruler; a bar with skipped parts as dark red areas with draggable white edges.
@@ -452,7 +455,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 - **`ScannerForm.cs` / `ScannerForm.Designer.cs`**: the window. Folder row (combo with recent folders, Browse, Refresh); left: the video list (name, length, gaps, plates read, labelled, scan state), Scan selected, Scan all not scanned, Stop, Take out of the queue, the "again" ticks and the gap settings for new videos; right: the VideoEditor; bottom: the log.
   - `LoadFolder` lists the video files, `ProbeFolderAsync` reads each one's details and files in the background (`FileState`: info, saved data, cars read). `OpenVideo` opens a ScanVideo on demand and keeps it while the app runs; `UpdateRow` fills a row from the open video or from its files, with its queue status.
   - `Queue` adds videos to the ScanQueue; `OnQueueChanged` refreshes the rows and the editor's title. `OnOptionChanged` saves the ticks and gap settings. Closing asks while a scan runs, then closes the editor (keeping its edits), stops the queue and saves the options.
-- **`ScannerOptions.cs`**: `%APPDATA%\MockRtsp\scanner.json`: folder, recent folders (`Remember`), gap settings for new videos (`GapDefaults`), GapsAgain, PlatesAgain. Never throws; out-of-range values fall back to the defaults (reported).
+- **`ScannerOptions.cs`**: `%APPDATA%\MockRtsp\scanner.json`: language, folder, recent folders (`Remember`), gap settings for new videos (`GapDefaults`), GapsAgain, PlatesAgain. Never throws; out-of-range values fall back to the defaults (reported).
 - **`ScanVideo.cs`**: one opened video and everything the scanner keeps about it; every change is saved at once (`VideoSidecar.SaveScan`, `PlateScanFile.Save`) and raised as `Changed(VideoChange)` (Gaps, Motion, Labels, Plates, Area, Reading).
   - `Open(ffmpeg, path)` probes, reads both files (`LoadError` when the main file is damaged: then nothing is saved or scanned), starts the previews.
   - Gaps: `SetSkips`, `ShowLiveMotion`/`ClearLiveMotion` (a running scan's graph), `SetMotion` (a finished scan: replaces the gaps only when they were not changed by hand, `GapsFromMotion`), `PickGaps(settings)`.
@@ -479,7 +482,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
 
 ## Changes timeline
 
-Newest last. Commit hashes are on `main`.
+Newest last. Commit hashes are on `main` (the history of the v2 and v3 branches was merged into it on 2026-11-22). Two commits of the October history were lost when `main` was rewritten as a single commit on 2026-10-29: the v3 merge `8df5185` and the README commit `0335caf`; what they held is in `85f3242`.
 
 **2026-10-16: first version and stabilisation**
 - `85f3c3c` MediaMTX-based mock camera; `a4538a5` solution file; `5e0b55b` WinForms app with exception handling.
@@ -535,7 +538,14 @@ Newest last. Commit hashes are on `main`.
 - The split moved MockRtsp.exe to another build folder (`MockRtsp\bin\...`). A MediaMTX left running by the old build (stopping the debugger ends MockRtsp.exe but not its MediaMTX) kept the RTSP port, and the new build did not count it as its own, so the server could not start ("port already in use"). Leftovers of any Mock RTSP build are now stopped first, MediaMTX is tied to the app with a Windows job object so it can no longer be left behind, and the port-in-use message names the MediaMTX processes running.
 - Checked on Linux with MediaMTX 1.15.1: a MediaMTX left running from another build folder reproduced the failure with the code before the fix; with the fix it is stopped and the server starts; a camera streams the main stream and substream while scanner-style saves change the video's file 30 times (the camera follows the gaps, the server keeps running). The job object is Windows only and was compile-checked.
 
+**2026-11-22: the language switch in the scanner, and everything on `main`**
+- English / Türkçe in the scanner (the language switch made on v3 on 2026-11-13, `f353fac`, which never reached `main`), rebuilt for the scanner's window, editor, lists, timeline, player and ground-truth dialog. The RTSP app only serves and stays in English. What is saved is the same in both languages.
+- `main` now holds everything: the work of `vehicle-labels`, and the whole history of the `v2` and `v3` branches merged in (with their files as they are on `main`: everything they had is here, rebuilt or replaced, as listed in the timeline above), so those branches can be deleted without losing anything.
+- Checked: the three projects compile against the .NET 8 Windows Forms reference assemblies (0 errors, 0 warnings); translation checks (English texts unchanged, Turkish texts, texts made earlier and saved reasons following a change, nested templates, back to English, saved directions staying English); the scanner under Mono WinForms with screenshots, switching to Turkish during a session and back. That run found a start-up crash in the translation code (fields set in the wrong order), fixed. Not yet run on Windows.
+
 ## Where we left off
+
+- **Language**: check the Turkish texts on Windows for width (longer words; the editor's rows wrap) and wording.
 
 - **The split** has not run on Windows yet. Check: both exes start from the solution (set multiple startup projects), the tools are copied from the solution folder, the scanner's layout at 100 % and higher scaling (the editor is dense; the right-hand lists are short at 940 px high), and the RTSP app's timeline following the scanner live while both run.
 - **Prefill**: try it on a long real video. The 3 % size / 2 % road minimum for a guess and leaving out cars with fewer than 3 reads are first choices; tune them if many prefilled labels need fixing. The to-check marks live in the plates file.

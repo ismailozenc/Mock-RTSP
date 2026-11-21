@@ -64,9 +64,9 @@ public sealed class ReadArea
     public string Describe()
     {
         string area = Detection is RectangleF d
-            ? $"a detection area of {d.Width * 100:0} % x {d.Height * 100:0} % of the picture"
-            : "the whole picture";
-        return Perspective is null ? area + ", with no road perspective" : area + ", with the road perspective";
+            ? Loc.T("a detection area of {0} % x {1} % of the picture", (d.Width * 100).ToString("0"), (d.Height * 100).ToString("0"))
+            : Loc.T("the whole picture");
+        return Loc.T(Perspective is null ? "{0}, with no road perspective" : "{0}, with the road perspective", area);
     }
 
     public string? DetectionText => Detection is RectangleF d ? FormatDetection(d) : null;
@@ -172,7 +172,7 @@ public sealed record BirelCamera(string Section, string Name, string Url, string
     }
 
     public string Describe() =>
-        $"{Name}  ({Url})  -  {(Roi is null ? "no detection area" : "detection area")}, {(Perspective is null ? "no road perspective" : "road perspective")}";
+        $"{Name}  ({Url})  -  {Loc.T(Roi is null ? "no detection area" : "detection area")}, {Loc.T(Perspective is null ? "no road perspective" : "road perspective")}";
 }
 
 /// <summary>Reads the cameras out of Birel Plaka's camera-settings.ini (read only: the file is never written).</summary>

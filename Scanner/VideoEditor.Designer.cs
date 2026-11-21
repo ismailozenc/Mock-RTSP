@@ -336,9 +336,10 @@ public sealed partial class VideoEditor
         _noVehicles.Text = "No vehicles in this part";
 
         _partTools.AutoSize = true;
+        _partTools.Dock = DockStyle.Fill;
         _partTools.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _partTools.Margin = new Padding(0, 6, 0, 0);
-        _partTools.WrapContents = false;
+        _partTools.WrapContents = true;
         _partTools.Controls.Add(_addVehicle);
         _partTools.Controls.Add(_removeVehicle);
         _partTools.Controls.Add(_noVehicles);
@@ -452,9 +453,10 @@ public sealed partial class VideoEditor
         _scanStatus.Text = "";
 
         _tools.AutoSize = true;
+        _tools.Dock = DockStyle.Fill;
         _tools.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         _tools.Margin = new Padding(0, 8, 0, 0);
-        _tools.WrapContents = false;
+        _tools.WrapContents = true;
         _tools.Controls.Add(_previousUnlabelled);
         _tools.Controls.Add(_nextUnlabelled);
         _tools.Controls.Add(_deleteOutside);

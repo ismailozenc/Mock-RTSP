@@ -8,6 +8,9 @@ internal sealed class ScannerOptions
     public const int MaxRecentFolders = 10;
 
     public string Folder { get; set; } = string.Empty;
+
+    /// <summary>"en" or "tr"; empty until chosen (the first run follows Windows).</summary>
+    public string Language { get; set; } = string.Empty;
     public List<string> RecentFolders { get; set; } = new();
 
     // Gap settings for a video scanned for the first time (each video then keeps its own).

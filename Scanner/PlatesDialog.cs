@@ -27,6 +27,7 @@ public sealed partial class PlatesDialog : Form
         _playhead = playheadSeconds;
         Text = $"Plates in {videoName}";
         _addAtPlayhead.Text = $"Add at playhead ({PlateMarks.FormatTime(playheadSeconds)})";
+        Loc.Apply(this);                    // the scanner's language (texts and templates above)
 
         Fill(plates);
     }
@@ -59,7 +60,7 @@ public sealed partial class PlatesDialog : Form
 
             int number = row.Index + 1;
             if (!PlateMarks.TryParseTime(Cell(0), out double time))
-                throw new InvalidOperationException($"Row {number}: '{Cell(0)}' is not a time. Use seconds (83.4) or minutes and seconds (1:23.4).");
+                throw new InvalidOperationException(Loc.T("Row {0}: '{1}' is not a time. Use seconds (83.4) or minutes and seconds (1:23.4).", number, Cell(0)));
 
             double? Value(int i)
             {
@@ -69,12 +70,12 @@ public sealed partial class PlatesDialog : Form
 
                 return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
                     ? v
-                    : throw new InvalidOperationException($"Row {number}: '{Cell(i)}' is not a number.");
+                    : throw new InvalidOperationException(Loc.T("Row {0}: '{1}' is not a number.", number, Cell(i)));
             }
 
             var plate = new PlateMark(time, Cell(1), Value(2), Value(3), Value(4), Value(5));
             if (PlateMarks.Check(plate, _duration) is { } problem)
-                throw new InvalidOperationException($"Row {number}: {problem}.");
+                throw new InvalidOperationException(Loc.T("Row {0}: {1}.", number, problem));
 
             plates.Add(plate);
         }
@@ -102,8 +103,8 @@ public sealed partial class PlatesDialog : Form
     {
         using var dialog = new OpenFileDialog
         {
-            Title = $"Import plates for {_videoName}",
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
+            Title = Loc.T("Import plates for {0}", _videoName),
+            Filter = Loc.T("CSV files (*.csv)|*.csv|All files (*.*)|*.*")
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -116,7 +117,7 @@ public sealed partial class PlatesDialog : Form
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            MessageBox.Show(this, ex.Message, "Import plates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Loc.T("Import plates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
@@ -127,8 +128,8 @@ public sealed partial class PlatesDialog : Form
             var plates = ReadTable();
             using var dialog = new SaveFileDialog
             {
-                Title = $"Export plates of {_videoName}",
-                Filter = "CSV files (*.csv)|*.csv",
+                Title = Loc.T("Export plates of {0}", _videoName),
+                Filter = Loc.T("CSV files (*.csv)|*.csv"),
                 FileName = Path.GetFileNameWithoutExtension(_videoName) + "-plates.csv"
             };
 
@@ -137,7 +138,7 @@ public sealed partial class PlatesDialog : Form
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(this, ex.Message, "Export plates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Loc.T("Export plates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

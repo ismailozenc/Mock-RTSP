@@ -31,7 +31,13 @@ public sealed partial class ScannerForm : Form
         _editor.GapDefaults = () => _options.GapDefaults;
         _editor.Message += (_, message) => Log(message);
 
+        // The language: as chosen before, else that of Windows; the whole window follows it.
+        Loc.Set(_options.Language.Length > 0 ? Loc.Parse(_options.Language) : Loc.FromWindows());
+        Loc.Apply(this);
+        _editor.RefreshTexts();
+
         _loadingOptions = true;
+        _language.SelectedIndex = (int)Loc.Current;
         _gapsAgain.Checked = _options.GapsAgain;
         _platesAgain.Checked = _options.PlatesAgain;
         _defThreshold.Value = (decimal)_options.GapThresholdPercent;
@@ -67,7 +73,7 @@ public sealed partial class ScannerForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (_queue is { IsBusy: true } && e.CloseReason == CloseReason.UserClosing
-            && MessageBox.Show(this, "A scan is running. Stop it and close? What was found so far is kept.", Text,
+            && MessageBox.Show(this, Loc.T("A scan is running. Stop it and close? What was found so far is kept."), Text,
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
         {
             e.Cancel = true;
@@ -86,7 +92,7 @@ public sealed partial class ScannerForm : Form
 
     private void OnBrowseClick(object? sender, EventArgs e) => Safe(() =>
     {
-        using var dialog = new FolderBrowserDialog { Description = "Folder with the videos to scan", UseDescriptionForTitle = true };
+        using var dialog = new FolderBrowserDialog { Description = Loc.T("Folder with the videos to scan"), UseDescriptionForTitle = true };
         if (Directory.Exists(_options.Folder))
             dialog.SelectedPath = _options.Folder;
         if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -118,7 +124,7 @@ public sealed partial class ScannerForm : Form
     {
         folder = folder.Trim();
         if (!Directory.Exists(folder))
-            throw new DirectoryNotFoundException($"The folder '{folder}' does not exist.");
+            throw new DirectoryNotFoundException(Loc.T("The folder '{0}' does not exist.", folder));
 
         folder = Path.GetFullPath(folder);
         _options.Remember(folder);
@@ -144,7 +150,7 @@ public sealed partial class ScannerForm : Form
             _videos.EndUpdate();
         }
 
-        _folderInfo.Text = files.Count == 0 ? "No video files in this folder." : $"Checking {files.Count} file(s)...";
+        _folderInfo.Text = files.Count == 0 ? Loc.T("No video files in this folder.") : Loc.T("Checking {0} file(s)...", files.Count);
         Log($"Video folder: {folder} ({files.Count} video file(s)).");
         if (files.Count > 0 && _ffmpeg is { } ffmpeg)
             _ = ProbeFolderAsync(files, ffmpeg, generation);
@@ -171,7 +177,7 @@ public sealed partial class ScannerForm : Form
             UpdateRow(file);
         }
 
-        _folderInfo.Text = $"{playable} playable video(s).";
+        _folderInfo.Text = Loc.T("{0} playable video(s).", playable);
         UpdateButtons();
     }
 
@@ -220,32 +226,32 @@ public sealed partial class ScannerForm : Form
         if (_open.TryGetValue(file, out var video))
         {
             length = PlateMarks.FormatTime(video.Duration);
-            gaps = video.LoadError is not null ? "file damaged" : !video.Scanned ? "not scanned" : video.Skips.Count == 0 ? "none" : $"{video.Skips.Count}";
-            plates = video.Reading is { } r ? $"{r.Cars.Count} car(s)" : "-";
+            gaps = video.LoadError is not null ? Loc.T("file damaged") : !video.Scanned ? Loc.T("not scanned") : video.Skips.Count == 0 ? Loc.T("none") : $"{video.Skips.Count}";
+            plates = video.Reading is { } r ? Loc.T("{0} car(s)", r.Cars.Count) : "-";
             var summary = video.Summary;
             int check = video.ToCheckCount;
-            labels = $"{summary.Labelled}/{summary.Parts}" + (check > 0 ? $", {check} to check" : "");
+            labels = check > 0 ? Loc.T("{0}/{1}, {2} to check", summary.Labelled, summary.Parts, check) : $"{summary.Labelled}/{summary.Parts}";
             tip = video.LoadError;
             if (_queue?.JobOf(video) is { } job)
-                scan = job.Status;
+                scan = Loc.Translate(job.Status);
         }
         else if (_files.TryGetValue(file, out var state) && state.Info is { } info)
         {
             length = PlateMarks.FormatTime(info.DurationSeconds);
             if (state.Saved is { } saved)
             {
-                gaps = !saved.Scanned ? "not scanned" : saved.Skips.Count == 0 ? "none" : $"{saved.Skips.Count}";
+                gaps = !saved.Scanned ? Loc.T("not scanned") : saved.Skips.Count == 0 ? Loc.T("none") : $"{saved.Skips.Count}";
                 var summary = VehicleLabels.Summarize(saved.Skips, saved.Vehicles, saved.EmptyParts, info.DurationSeconds);
                 labels = $"{summary.Labelled}/{summary.Parts}";
             }
             else
             {
-                gaps = "file damaged";
+                gaps = Loc.T("file damaged");
                 labels = "?";
                 tip = state.Error;
             }
 
-            plates = state.Cars is int cars ? $"{cars} car(s)" : "-";
+            plates = state.Cars is int cars ? Loc.T("{0} car(s)", cars) : "-";
         }
         else
         {
@@ -270,7 +276,7 @@ public sealed partial class ScannerForm : Form
             return video;
 
         if (_ffmpeg is null)
-            throw new InvalidOperationException($"ffmpeg.exe not found. Put it in the '{Toolchain.FfmpegFolder}' folder next to MockRtspScanner.exe.");
+            throw new InvalidOperationException(Loc.T("ffmpeg.exe not found. Put it in the '{0}' folder next to MockRtspScanner.exe.", Toolchain.FfmpegFolder));
 
         video = ScanVideo.Open(_ffmpeg, file);
         video.Message += (_, message) => Log(message);
@@ -316,7 +322,7 @@ public sealed partial class ScannerForm : Form
     private void Queue(List<string> files)
     {
         if (_queue is null)
-            throw new InvalidOperationException($"ffmpeg.exe not found. Put it in the '{Toolchain.FfmpegFolder}' folder next to MockRtspScanner.exe.");
+            throw new InvalidOperationException(Loc.T("ffmpeg.exe not found. Put it in the '{0}' folder next to MockRtspScanner.exe.", Toolchain.FfmpegFolder));
 
         foreach (var file in files.Where(_files.ContainsKey))
         {
@@ -378,6 +384,22 @@ public sealed partial class ScannerForm : Form
 
     private void OnTimerTick(object? sender, EventArgs e) => UpdateButtons();
 
+    /// <summary>The language combobox: the whole window, the editor and the list follow at once; the choice is kept.</summary>
+    private void OnLanguageChanged(object? sender, EventArgs e)
+    {
+        if (_loadingOptions || _language.SelectedIndex < 0 || (AppLanguage)_language.SelectedIndex == Loc.Current)
+            return;
+
+        Loc.Set((AppLanguage)_language.SelectedIndex);
+        _options.Language = Loc.Code(Loc.Current);
+        _options.Save();
+        Loc.Apply(this);
+        _editor.RefreshTexts();
+        _folderInfo.Text = Loc.Translate(_folderInfo.Text);
+        foreach (ListViewItem item in _videos.Items)
+            UpdateRow((string)item.Tag!);
+    }
+
     // ===================================================================== helpers
 
     private void Safe(Action action, string context)
@@ -392,7 +414,7 @@ public sealed partial class ScannerForm : Form
             if (!expected)
                 ErrorReporter.Report(ex, context);
             Log($"ERROR: {context}: {ex.Message}");
-            MessageBox.Show(this, ex.Message, context, MessageBoxButtons.OK, expected ? MessageBoxIcon.Warning : MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, Loc.T(context), MessageBoxButtons.OK, expected ? MessageBoxIcon.Warning : MessageBoxIcon.Error);
         }
     }
 

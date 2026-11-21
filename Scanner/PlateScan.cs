@@ -300,7 +300,6 @@ internal sealed class PlateScanner : IDisposable
             var groups = new ReadGroups(policy, _ocrConfig.Alphabet, TicksPerSecond);
             int frames = 0;
             int firstCar = cars.Count;          // this part's cars are the ones added from here
-            string where = $"part {part.Number} of {parts.Count}";
 
             foreach (var (rgb, seconds) in Frames(videoPath, part, width, height, fps, cancel))
             {
@@ -326,7 +325,7 @@ internal sealed class PlateScanner : IDisposable
                 }
 
                 cars.AddRange(closed.Select(ToCar));
-                progress((done + Math.Min(part.Length, seconds - part.Start)) / total, $"{where}: {cars.Count} car(s) so far");
+                progress((done + Math.Min(part.Length, seconds - part.Start)) / total, Loc.T("part {0} of {1}: {2} car(s) so far", part.Number, parts.Count, cars.Count));
             }
 
             cars.AddRange(groups.CloseAll().Select(ToCar));
@@ -334,7 +333,7 @@ internal sealed class PlateScanner : IDisposable
             scanned.Add(scannedPart);
             partDone(scannedPart, cars.GetRange(firstCar, cars.Count - firstCar).OrderBy(c => c.Time).ToList());
             done += part.Length;
-            progress(done / total, $"{where} done: {cars.Count} car(s) so far");
+            progress(done / total, Loc.T("part {0} of {1} done: {2} car(s) so far", part.Number, parts.Count, cars.Count));
         }
 
         return new PlateScan(DateTime.UtcNow, PlateScanSettings.DetectorFile, PlateScanSettings.OcrFile, _settings.IntervalMs,
