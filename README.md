@@ -60,11 +60,17 @@ The numbers come from MediaMTX's control API, which the app turns on for this co
 
 ## Vehicle labels per playing part
 
-The motion scan splits a video into **playing parts**: the stretches between skips, where something moves (the green parts of the play strip). **Labels...** on a camera, or a double-click on a part in the timeline's labels strip (or right-click > **Label part N...**), opens the labels of the video it is playing:
+The motion scan splits a video into **playing parts**: the stretches between skips, where something moves (the green parts of the play strip). To label them, open the labels of a video in any of these ways:
+- **Label parts...** under the video list, for the selected video. No camera is needed. A video that has not been scanned yet is offered a scan first, since its parts come from the scan (or it can be labelled as one part).
+- **Labels...** on a camera, for the video it is playing.
+- A double-click on a part in the timeline's labels strip, or right-click > **Label part N...**.
+
+The dialog has:
+- **The player**, top left: the selected part plays straight from the video file, in a loop, so you can see each vehicle, which way it goes and its plate. **Pause**/**Play**, **< Frame** and **Frame >** (one picture back or forward), **|< Start**, speed (0.25x to 2x) and **Loop**. Click or drag the green bar under the picture to jump within the part. The **mouse wheel zooms** around the mouse (up to 8x) to read a plate; drag to move the zoomed picture, double-click for the whole picture again. With the picture clicked, Space pauses and Left/Right step one frame.
 
 - **The list of playing parts**, with their start, end, length and vehicles. Parts still to label are orange. The line at the top counts them: "12 playing parts, 7 labelled (9 vehicles: 5 coming, 4 going), 5 to label".
-- **The selected part's vehicles**, as many as it has: **time**, **direction** (coming towards the camera, or going away) and **plate** (optional; leave it empty when it cannot be read). **Add vehicle** puts one at the camera's position when it is in this part, otherwise in the middle of the part. A part with movement but no vehicle (a pedestrian, a door) gets **No vehicles in this part**, so it counts as labelled too.
-- **Play this part** jumps the camera to the start of the part, to watch it (for example in VLC) while labelling. It works while the camera plays this video.
+- **The selected part's vehicles**, as many as it has: **time**, **direction** (coming towards the camera, or going away) and **plate** (optional; leave it empty when it cannot be read). **Add vehicle at the player's time** puts one at the moment the player shows, so pause on the vehicle first. Double-click a vehicle's time or plate to see that moment in the player. A part with movement but no vehicle (a pedestrian, a door) gets **No vehicles in this part**, so it counts as labelled too.
+- **Move the camera here** jumps the camera's stream to the start of the part, when a camera is playing this video.
 - **Next to label** and **Previous to label** go through the parts that are left.
 - **Export CSV...** writes one line per vehicle: `part,part_start,part_end,time,direction,plate` (a part with no vehicles gets one line with direction `none`).
 
@@ -351,6 +357,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
     - `ReapplyMotion` asks before replacing hand-edited skips.
     - `RestartAsync`/`ApplySettingsToCameraAsync` restart, wait for the stream to be live, and reopen VLC.
   - Playlists: `EditPlaylistAsync` opens the PlaylistDialog, opens and releases videos, and restarts only if the first video changes what is sent.
+  - Labels: `EditLabelsAsync` (from a camera panel) and `OnLabelFileClick` (Label parts... under the video list, which opens the video if needed, offers a motion scan for one never scanned, and releases it afterwards unless a scan is running) both go through `ShowLabels`.
   - Ground truth: `OnPlateStreamed` writes each `PlateStreamed` to `_groundTruth` (a GroundTruthLog for the folder in the settings) and the log. `EditPlatesAsync` opens the PlatesDialog; `OnScoreClick` opens the ScoreDialog on today's (or the latest) log.
   - Live stats: `PollStats`/`PollStatsAsync` run from the timer about once a second; `StatsFor(entry)` serves the panels. `CheckStreamPath` and `NextStreamPath` keep substream paths free of clashes.
   - Projects: `CaptureProject`, `SaveProject(path or null = ask)`, `OpenProjectAsync` (stops the server, applies settings, port and folder, starts the server, `RestoreCamera` for each), `ConfirmDiscardChanges` (Yes/No/Cancel when the fingerprint differs), `OnShown` (reopens the last project), `UpdateTitle`.
@@ -378,7 +385,8 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `Result` holds the edited copy; `CommitTyped` fixes NumericUpDown typing.
 - **`PlaylistDialog.cs` / `PlaylistDialog.Designer.cs`**: two lists (videos in the folder, and the playlist) with Add, Remove, Move up/down and Other file.... `Files` returns the chosen order.
 - **`PlatesDialog.cs` / `PlatesDialog.Designer.cs`**: a DataGridView of time, plate, x, y, width and height for one video, with Add at playhead, Remove, Import CSV... and Export CSV.... `Plates` returns the checked, sorted list; errors name the row.
-- **`LabelsDialog.cs` / `LabelsDialog.Designer.cs`**: the labels of one video. Left, a ListView of the playing parts (unlabelled ones orange) under a summary line; right, a DataGridView of the selected part's vehicles (time, direction combo, plate) with Add vehicle, Remove, "No vehicles in this part" and Play this part (a seek callback, null when the camera plays another video). Previous/Next to label, Delete labels in skipped parts, Export CSV. Edits are kept per part as the selection moves (`CommitCurrent` checks every row is a time inside the part); `Vehicles` and `EmptyParts` return the result after OK.
+- **`LabelsDialog.cs` / `LabelsDialog.Designer.cs`**: the labels of one video. Left, a PartPlayer playing the selected part with a ListView of the playing parts (unlabelled ones orange) under it, below a summary line; right, a DataGridView of the selected part's vehicles (time, direction combo, plate) with Add vehicle at the player's time, Remove, "No vehicles in this part" and Move the camera here (a seek callback, null when no camera plays the video). Previous/Next to label, Delete labels in skipped parts, Export CSV. Edits are kept per part as the selection moves (`CommitCurrent` checks every row is a time inside the part); `Vehicles` and `EmptyParts` return the result after OK.
+- **`PartPlayer.cs`**: a Control that plays one part of a video file, for labelling. `SetVideo(ffmpeg, file, info)`, `PlayPart(start, end)`, `ShowMoment(t)` (paused), `Position`, `Stop()`. A `Decoder` runs `ffmpeg -ss <start> -i <file> -t <length> -vf scale -pix_fmt bgr24 -f rawvideo pipe:1` at the picture's size (at most 1600 wide, width a multiple of 4 so bitmap rows need no padding) and reads pictures on a background thread into a small BlockingCollection, so FFmpeg waits while paused. A 5 ms WinForms timer shows them at the video's frame rate times the speed; at the end of the part it loops or pauses. Frame back decodes again from one frame earlier. Zoom: `_zoom` and `_focus` pick the source rectangle drawn into the letterboxed picture area. Toolbar buttons are child controls created in code, like the Timeline's scroll bar.
 - **`ScoreDialog.cs` / `ScoreDialog.Designer.cs`**: picks the ground-truth log and the results file, sets the before/after window, shows `PlateScorer.Summary`, and saves the CSV report.
 - **`MainForm.resx`, `OptionsDialog.resx`**: resource files added by the Visual Studio designer. Nothing in them is used by the code.
 
@@ -420,8 +428,9 @@ Newest last. Commit hashes are on `main`.
 - Live stats per camera: measured fps, bitrate and viewers for the main stream and substream, from MediaMTX's API (now on, on a free local port, for this computer only).
 
 **2026-11-21: vehicle labels per playing part**
-- Labels... on each camera and the timeline's labels strip: per playing part, the vehicles in it (time, coming or going, optional plate) or "no vehicles"; counts of parts and labelled parts on the timeline, the camera panel and the video list; Play this part, Next to label, Export CSV. Saved in `.mockrtsp.json`.
-- Checked by compiling against the .NET 8 Windows Forms reference assemblies on Linux (0 errors, 0 warnings), a console test of the labels logic and the sidecar round trip, and the Timeline and LabelsDialog driven under Mono WinForms (net48) with screenshots from Xvfb. Not yet run on Windows.
+- Labels... on each camera and the timeline's labels strip: per playing part, the vehicles in it (time, coming or going, optional plate) or "no vehicles"; counts of parts and labelled parts on the timeline, the camera panel and the video list; Next to label, Export CSV. Saved in `.mockrtsp.json`.
+- A player in the labels dialog plays the selected part from the file (FFmpeg raw frames), looping, with pause, frame steps, speed and mouse-wheel zoom to read plates; Add vehicle uses its time. Label parts... under the video list labels a video without a camera.
+- Checked by compiling against the .NET 8 Windows Forms reference assemblies on Linux (0 errors, 0 warnings), a console test of the labels logic and the sidecar round trip, and the Timeline and LabelsDialog (with the player decoding a real test video through FFmpeg) driven under Mono WinForms (net48) with screenshots from Xvfb. Not yet run on Windows.
 
 ## Where we left off
 

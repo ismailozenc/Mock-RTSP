@@ -262,28 +262,79 @@ public sealed partial class MainForm : Form, ICameraHost
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// One video's vehicle labels per playing part, saved next to it. "Play this part" in the dialog
-    /// moves the camera when it is playing this video.
-    /// </summary>
+    /// <summary>One video's vehicle labels per playing part, from its camera panel or its timeline.</summary>
     public Task EditLabelsAsync(CameraEntry entry, VideoFile video, double? showAt)
     {
-        bool playing = ReferenceEquals(entry.Video, video);
-        Func<double>? playhead = playing ? () => entry.Camera.Position.TotalSeconds : null;
-        Action<double>? seek = playing
-            ? seconds =>
-            {
-                entry.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
-                Log($"'{entry.StreamPath}': playing the part from {PlateMarks.FormatTime(seconds)} for labelling.");
-            }
-            : null;
+        ShowLabels(video, ReferenceEquals(entry.Video, video) ? entry : null, showAt);
+        return Task.CompletedTask;
+    }
 
-        using var dialog = new LabelsDialog(video.Name, video.Skips, video.Duration, video.Vehicles, video.EmptyParts,
-            playhead, showAt, seek);
+    /// <summary>
+    /// "Label parts..." under the video list: labels the selected video without needing a camera.
+    /// A video not scanned yet is offered a scan first, since its playing parts come from the scan.
+    /// </summary>
+    private void OnLabelFileClick(object? sender, EventArgs e) => Safe(() =>
+    {
+        string file = _files.SelectedItems.Cast<ListViewItem>().Select(i => (string)i.Tag!).FirstOrDefault()
+            ?? throw new InvalidOperationException("Select a video in the list first.");
+
+        var video = OpenVideo(file);
+        if (video.IsScanning)
+        {
+            // Kept open, so the scan finishes; its parts are ready next time.
+            throw new InvalidOperationException(
+                $"{video.Name} is being scanned for movement ({video.ScanProgress * 100:0}%). Its playing parts come from the scan: "
+                + "click Label parts... again when it is done (see the log).");
+        }
+
+        if (video.Motion is null)
+        {
+            var answer = MessageBox.Show(this,
+                $"{video.Name} has not been scanned for movement, so it is one playing part from start to end.\n\n"
+                + "Scan it now? (Yes: scan, then click Label parts... again. No: label it as one part.)",
+                "Label parts", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel)
+            {
+                ReleaseVideoIfUnused(video);
+                return;
+            }
+
+            if (answer == DialogResult.Yes)
+            {
+                video.StartScan(automatic: false);
+                return;
+            }
+        }
+
+        try
+        {
+            ShowLabels(video, _entries.FirstOrDefault(entry => ReferenceEquals(entry.Video, video)), null);
+        }
+        finally
+        {
+            ReleaseVideoIfUnused(video);
+        }
+    }, "Label parts");
+
+    /// <summary>
+    /// The labels dialog for a video. Its player plays the parts straight from the file; with a
+    /// camera playing the video, "Move the camera here" jumps the camera too.
+    /// </summary>
+    private void ShowLabels(VideoFile video, CameraEntry? camera, double? showAt)
+    {
+        Func<double>? position = camera is null ? null : () => camera.Camera.Position.TotalSeconds;
+        Action<double>? seek = camera is null
+            ? null
+            : seconds =>
+            {
+                camera.Camera.SeekTo(TimeSpan.FromSeconds(seconds));
+                Log($"'{camera.StreamPath}': moved to the part at {PlateMarks.FormatTime(seconds)} for labelling.");
+            };
+
+        using var dialog = new LabelsDialog(video.Path, video.Info, _ffmpegExe, video.Skips, video.Vehicles, video.EmptyParts,
+            position, showAt, seek);
         if (dialog.ShowDialog(this) == DialogResult.OK)
             video.SetLabels(dialog.Vehicles, dialog.EmptyParts);
-
-        return Task.CompletedTask;
     }
 
     private void OnScoreClick(object? sender, EventArgs e) => Safe(() =>

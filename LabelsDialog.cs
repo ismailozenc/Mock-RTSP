@@ -3,16 +3,18 @@ namespace MockRtsp;
 /// <summary>
 /// Labels the playing parts of one video with the vehicles in them: for each part, every vehicle
 /// with its direction (coming or going) and its plate, or "no vehicles". This is the ground truth a
-/// vehicle detector (for example the traffic monitor) is checked against. The list shows every
-/// playing part and how many are labelled; "Next to label" walks through the rest, and "Play this
-/// part" jumps the camera there so the part can be watched while labelling.
+/// vehicle detector (for example the traffic monitor) is checked against. The selected part plays
+/// in the player at the top left, straight from the video file, so its vehicles, their direction
+/// and their plates can be seen while labelling (pause, step frame by frame, zoom with the mouse
+/// wheel). The list shows every playing part and how many are labelled; "Next to label" walks
+/// through the rest, and "Move the camera here" jumps the camera's stream to the part.
 /// The layout lives in LabelsDialog.Designer.cs.
 /// </summary>
 public sealed partial class LabelsDialog : Form
 {
     private readonly double _duration;
-    private readonly Func<double>? _playhead;
-    private readonly Action<double>? _seek;
+    private readonly Func<double>? _cameraPosition;
+    private readonly Action<double>? _seekCamera;
     private readonly string _videoName;
     private readonly List<PlayingPart> _parts;
     private readonly List<VehicleMark> _vehicles;   // all of them, including any in skipped parts
@@ -21,36 +23,40 @@ public sealed partial class LabelsDialog : Form
     private bool _loading;
 
     /// <summary>Parameterless constructor for the designer.</summary>
-    public LabelsDialog() : this("video", Array.Empty<SkipRange>(), 60, Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null)
+    public LabelsDialog() : this("video.mp4", new VideoInfo(1920, 1080, 25, 60), null, Array.Empty<SkipRange>(),
+        Array.Empty<VehicleMark>(), Array.Empty<double>(), null, null, null)
     {
     }
 
-    /// <param name="playhead">Where the camera is in this video now, or null when it plays another video.</param>
-    /// <param name="showAt">A moment whose part is shown first, or null for the part at the playhead.</param>
-    /// <param name="seek">Jumps the camera to a moment in this video, or null when it plays another video.</param>
-    public LabelsDialog(string videoName, IReadOnlyList<SkipRange> skips, double durationSeconds,
+    /// <param name="videoPath">The video file, played in the dialog's player.</param>
+    /// <param name="ffmpegPath">FFmpeg, for the player; null shows a note instead of the video.</param>
+    /// <param name="cameraPosition">Where a camera playing this video is now, or null when none is.</param>
+    /// <param name="showAt">A moment whose part is shown first, or null for the part at the camera's position.</param>
+    /// <param name="seekCamera">Jumps that camera to a moment in this video, or null when none plays it.</param>
+    public LabelsDialog(string videoPath, VideoInfo info, string? ffmpegPath, IReadOnlyList<SkipRange> skips,
         IReadOnlyList<VehicleMark> vehicles, IReadOnlyList<double> emptyParts,
-        Func<double>? playhead, double? showAt, Action<double>? seek)
+        Func<double>? cameraPosition, double? showAt, Action<double>? seekCamera)
     {
         InitializeComponent();
 
-        _videoName = videoName;
-        _duration = durationSeconds;
-        _playhead = playhead;
-        _seek = seek;
-        _parts = VehicleLabels.PlayingParts(skips, durationSeconds);
+        _videoName = Path.GetFileName(videoPath);
+        _duration = info.DurationSeconds;
+        _cameraPosition = cameraPosition;
+        _seekCamera = seekCamera;
+        _parts = VehicleLabels.PlayingParts(skips, _duration);
         _vehicles = vehicles.ToList();
         _empty = emptyParts.ToList();
 
-        Text = $"Labels in {videoName}";
-        _play.Enabled = seek is not null;
-        _playNote.Text = seek is null
-            ? "The camera is playing another video, so it cannot jump here."
-            : "Jumps the camera to the start of this part, to watch it (for example in VLC).";
+        Text = $"Labels in {_videoName}";
+        _player.SetVideo(ffmpegPath, videoPath, info);
+        _play.Enabled = seekCamera is not null;
+        _playNote.Text = seekCamera is null
+            ? "No camera is playing this video now."
+            : "Jumps the camera's stream to the start of this part.";
 
         FillParts();
 
-        double? around = showAt ?? playhead?.Invoke();
+        double? around = showAt ?? cameraPosition?.Invoke();
         int first = around is double t ? _parts.FindIndex(p => p.Contains(t, _duration)) : -1;
         if (first < 0)
             first = Groups().FindIndex(g => !g.IsLabelled);
@@ -117,6 +123,7 @@ public sealed partial class LabelsDialog : Form
     private void ShowNoParts()
     {
         _partTitle.Text = "This video has nothing that plays.";
+        _player.Stop();
         _table.Enabled = _addVehicle.Enabled = _removeVehicle.Enabled = _noVehicles.Enabled = _play.Enabled = false;
     }
 
@@ -162,6 +169,7 @@ public sealed partial class LabelsDialog : Form
             _loading = false;
         }
 
+        _player.PlayPart(part.Start, part.End);
         return true;
     }
 
@@ -236,9 +244,11 @@ public sealed partial class LabelsDialog : Form
         if (_current < 0)
             return;
 
-        // At the camera's position when it is in this part, otherwise in the middle of the part.
+        // At the moment the player shows; else where the camera is, if in this part; else the middle of the part.
         var part = _parts[_current];
-        double time = _playhead?.Invoke() is double now && part.Contains(now, _duration) ? now : part.Middle;
+        double time = _player.Position is double shown && part.Contains(shown, _duration) ? shown
+            : _cameraPosition?.Invoke() is double now && part.Contains(now, _duration) ? now
+            : part.Middle;
 
         // Values first, then editing: a cell that starts editing before it has its value would save it empty.
         _table.EndEdit();
@@ -269,6 +279,16 @@ public sealed partial class LabelsDialog : Form
             combo.DroppedDown = true;
     }
 
+    /// <summary>Double-click a vehicle's row: the player shows that moment, paused.</summary>
+    private void OnCellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex == _colDirection.Index)
+            return;
+
+        if (PlateMarks.TryParseTime(_table.Rows[e.RowIndex].Cells[0].Value?.ToString() ?? string.Empty, out double time))
+            _player.ShowMoment(time);
+    }
+
     /// <summary>"No vehicles" only makes sense for a part with none in the table.</summary>
     private void OnRowsChanged(object? sender, EventArgs e)
     {
@@ -284,7 +304,13 @@ public sealed partial class LabelsDialog : Form
     private void OnPlayClick(object? sender, EventArgs e)
     {
         if (_current >= 0)
-            _seek?.Invoke(_parts[_current].Start);
+            _seekCamera?.Invoke(_parts[_current].Start);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _player.Stop();
+        base.OnFormClosed(e);
     }
 
     // ===================================================================== moving between parts

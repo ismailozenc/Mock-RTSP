@@ -3,14 +3,17 @@
 namespace MockRtsp;
 
 // Layout: one grid docked Fill, two columns. Row 0 the summary (both columns). Row 1 (the only
-// row that grows): the playing parts on the left, and on the right the selected part's vehicles
-// with their buttons. Row 2 the buttons for moving between parts and exporting, row 3 OK and Cancel.
+// row that grows): on the left the player showing the selected part with the list of playing parts
+// under it, and on the right the selected part's vehicles with their buttons. Row 2 the buttons for
+// moving between parts and exporting, row 3 OK and Cancel.
 public sealed partial class LabelsDialog
 {
     private System.ComponentModel.IContainer? components = null;
 
     private TableLayoutPanel _grid = null!;
     private Label _summary = null!;
+    private TableLayoutPanel _left = null!;
+    private PartPlayer _player = null!;
     private ListView _partList = null!;
     private ColumnHeader _colNumber = null!;
     private ColumnHeader _colFrom = null!;
@@ -53,6 +56,8 @@ public sealed partial class LabelsDialog
     {
         _grid = new TableLayoutPanel();
         _summary = new Label();
+        _left = new TableLayoutPanel();
+        _player = new PartPlayer();
         _partList = new ListView();
         _colNumber = new ColumnHeader();
         _colFrom = new ColumnHeader();
@@ -83,6 +88,7 @@ public sealed partial class LabelsDialog
 
         ((System.ComponentModel.ISupportInitialize)_table).BeginInit();
         _grid.SuspendLayout();
+        _left.SuspendLayout();
         _editor.SuspendLayout();
         _partTools.SuspendLayout();
         _playRow.SuspendLayout();
@@ -113,9 +119,23 @@ public sealed partial class LabelsDialog
         _partList.Dock = DockStyle.Fill;
         _partList.FullRowSelect = true;
         _partList.HideSelection = false;
-        _partList.Margin = new Padding(0, 0, 8, 0);
+        _partList.Margin = new Padding(0, 8, 0, 0);
         _partList.MultiSelect = false;
         _partList.View = View.Details;
+
+        // ================= Player, and the parts under it =================
+        _player.Dock = DockStyle.Fill;
+        _player.Margin = new Padding(0);
+
+        _left.ColumnCount = 1;
+        _left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        _left.Dock = DockStyle.Fill;
+        _left.Margin = new Padding(0, 0, 10, 0);
+        _left.RowCount = 2;
+        _left.RowStyles.Add(new RowStyle(SizeType.Percent, 68F));
+        _left.RowStyles.Add(new RowStyle(SizeType.Percent, 32F));
+        _left.Controls.Add(_player, 0, 0);
+        _left.Controls.Add(_partList, 0, 1);
 
         // ================= Selected part =================
         _partTitle.AutoSize = true;
@@ -143,11 +163,11 @@ public sealed partial class LabelsDialog
         _table.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
 
         _addVehicle.AutoSize = true;
-        _addVehicle.Text = "Add vehicle";
+        _addVehicle.Text = "Add vehicle at the player's time";
         _removeVehicle.AutoSize = true;
         _removeVehicle.Text = "Remove";
         _noVehicles.AutoSize = true;
-        _noVehicles.Margin = new Padding(14, 7, 3, 3);
+        _noVehicles.Margin = new Padding(10, 7, 3, 3);
         _noVehicles.Text = "No vehicles in this part";
 
         _partTools.AutoSize = true;
@@ -159,12 +179,12 @@ public sealed partial class LabelsDialog
         _partTools.Controls.Add(_noVehicles);
 
         _play.AutoSize = true;
-        _play.Text = "Play this part";
+        _play.Text = "Move the camera here";
         _playNote.AutoSize = true;
         _playNote.ForeColor = SystemColors.GrayText;
         _playNote.Margin = new Padding(6, 8, 3, 3);
         _playNote.MaximumSize = new Size(330, 0);
-        _playNote.Text = "Jumps the camera to the start of this part.";
+        _playNote.Text = "Jumps the camera's stream to the start of this part.";
 
         _playRow.AutoSize = true;
         _playRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -228,8 +248,8 @@ public sealed partial class LabelsDialog
 
         // ================= Grid =================
         _grid.ColumnCount = 2;
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52F));
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62F));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38F));
         _grid.Dock = DockStyle.Fill;
         _grid.Padding = new Padding(12);
         _grid.RowCount = 4;
@@ -238,7 +258,7 @@ public sealed partial class LabelsDialog
         _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _grid.Controls.Add(_summary, 0, 0);
-        _grid.Controls.Add(_partList, 0, 1);
+        _grid.Controls.Add(_left, 0, 1);
         _grid.Controls.Add(_editor, 1, 1);
         _grid.Controls.Add(_tools, 0, 2);
         _grid.Controls.Add(_bottom, 0, 3);
@@ -251,6 +271,7 @@ public sealed partial class LabelsDialog
         _table.RowsAdded += new DataGridViewRowsAddedEventHandler(OnRowsChanged);
         _table.RowsRemoved += new DataGridViewRowsRemovedEventHandler(OnRowsChanged);
         _table.CellClick += new DataGridViewCellEventHandler(OnCellClick);
+        _table.CellDoubleClick += new DataGridViewCellEventHandler(OnCellDoubleClick);
         _addVehicle.Click += new EventHandler(OnAddVehicleClick);
         _removeVehicle.Click += new EventHandler(OnRemoveVehicleClick);
         _play.Click += new EventHandler(OnPlayClick);
@@ -265,12 +286,12 @@ public sealed partial class LabelsDialog
         AutoScaleDimensions = new SizeF(7F, 15F);   // Segoe UI 9pt at 96 DPI (100%)
         AutoScaleMode = AutoScaleMode.Font;
         CancelButton = _cancel;
-        ClientSize = new Size(940, 520);
+        ClientSize = new Size(1240, 780);
         Controls.Add(_grid);
         Font = new Font("Segoe UI", 9F);
         MaximizeBox = true;
         MinimizeBox = false;
-        MinimumSize = new Size(760, 400);
+        MinimumSize = new Size(980, 620);
         ShowIcon = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -283,6 +304,7 @@ public sealed partial class LabelsDialog
         _playRow.PerformLayout();
         _editor.ResumeLayout(false);
         _editor.PerformLayout();
+        _left.ResumeLayout(false);
         _tools.ResumeLayout(false);
         _bottom.ResumeLayout(false);
         _grid.ResumeLayout(false);
