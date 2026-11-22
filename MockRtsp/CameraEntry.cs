@@ -45,6 +45,7 @@ public sealed class CameraEntry
         {
             Camera.SetSkipRanges(video.Path, video.Skips);
             Camera.SetPlates(video.Path, video.Plates);
+            Camera.SetVehicles(video.Path, video.Vehicles, video.EmptyParts);
         }
     }
 }

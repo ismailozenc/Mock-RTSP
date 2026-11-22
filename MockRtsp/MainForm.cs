@@ -13,6 +13,8 @@ public sealed partial class MainForm : Form, ICameraHost
     private StreamOptions _options = new();         // Saved in options.json. Loaded in OnLoad.
     private StreamOptions? _serverOptions;          // What the running server was started with.
     private MediaMtxServer? _server;
+    private volatile TruthFeed? _feed;              // the ground-truth feed on the RTSP port + 1, while the server runs
+    private volatile object[] _feedCameras = Array.Empty<object>();   // the cameras for the feed's "hello" (read on its thread)
     private bool _busy;
 
     private readonly List<CameraEntry> _entries = new();
@@ -216,9 +218,16 @@ public sealed partial class MainForm : Form, ICameraHost
 
     // ===================================================================== ground truth
 
-    /// <summary>A camera streamed a ground-truth plate: write it to the log. Called on the camera's thread.</summary>
+    /// <summary>The cameras as the feed's "hello" lists them: stream path and substream path (when it sends one).</summary>
+    private void UpdateFeedCameras() =>
+        _feedCameras = _entries
+            .Select(e => (object)new { camera = e.StreamPath, substream = e.Camera.SubstreamPath })
+            .ToArray();
+
+    /// <summary>A camera streamed a ground-truth plate: write it to the log and the feed. Called on the camera's thread.</summary>
     private void OnPlateStreamed(CameraEntry entry, PlateStreamedEventArgs e)
     {
+        _feed?.Plate(entry.StreamPath, e);
         try
         {
             var log = _groundTruth;
@@ -602,11 +611,24 @@ public sealed partial class MainForm : Form, ICameraHost
 
         await RunBusyAsync(async () =>
         {
-            _server = await MediaMtxServer.StartAsync(port, exe, log: Log, options: started);
+            // The ground-truth feed first: if its port is taken, nothing starts.
+            var feed = new TruthFeed(port + 1, () => _feedCameras, Log);
+            try
+            {
+                _server = await MediaMtxServer.StartAsync(port, exe, log: Log, options: started);
+            }
+            catch
+            {
+                feed.Dispose();
+                throw;
+            }
+
+            _feed = feed;
             _serverOptions = started;
         });
 
         Log($"MediaMTX listening on rtsp://127.0.0.1:{port}");
+        Log($"Ground-truth feed on tcp://<this computer>:{port + 1}: what each camera streams (parts, vehicles with direction and plate, plates), one JSON line each.");
         UpdateButtons();
     }
 
@@ -619,6 +641,9 @@ public sealed partial class MainForm : Form, ICameraHost
         var server = _server;
         _server = null;
         _serverOptions = null;
+        var feed = _feed;
+        _feed = null;
+        feed?.Dispose();
         _liveStats.Clear();
 
         try
@@ -701,11 +726,16 @@ public sealed partial class MainForm : Form, ICameraHost
         {
             camera.SetSkipRanges(video.Path, video.Skips);
             camera.SetPlates(video.Path, video.Plates);
+            camera.SetVehicles(video.Path, video.Vehicles, video.EmptyParts);
         }
 
         var entry = new CameraEntry(path, playlist, camera);
         camera.PlateStreamed += (_, e) => OnPlateStreamed(entry, e);
+        camera.PartStreamed += (_, e) => _feed?.Part(entry.StreamPath, e);
+        camera.VehicleStreamed += (_, e) => _feed?.Vehicle(entry.StreamPath, e);
         _entries.Add(entry);
+        UpdateFeedCameras();
+        _feed?.CameraChanged(entry.StreamPath, entry.Camera.SubstreamPath, "added");
         var panel = new CameraPanel(this, entry);
         _panels[entry] = panel;
         _cameras.Controls.Add(panel);
@@ -992,6 +1022,7 @@ public sealed partial class MainForm : Form, ICameraHost
         {
             entry.Camera.SetSkipRanges(video.Path, video.Skips);
             entry.Camera.SetPlates(video.Path, video.Plates);
+            entry.Camera.SetVehicles(video.Path, video.Vehicles, video.EmptyParts);
         }
 
         UpdateFileItem(video.Path);
@@ -1100,6 +1131,8 @@ public sealed partial class MainForm : Form, ICameraHost
         }
 
         _entries.Remove(entry);
+        UpdateFeedCameras();
+        _feed?.CameraChanged(entry.StreamPath, entry.Camera.SubstreamPath, "removed");
         if (_panels.TryGetValue(entry, out var panel))
         {
             _panels.Remove(entry);

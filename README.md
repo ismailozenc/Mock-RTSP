@@ -12,6 +12,7 @@ Beyond looping a file, each camera behaves like a controllable camera:
 - playlists of several videos
 - the gaps found by the scanner are skipped, so only the parts with movement are streamed
 - a substream (`.../102` next to `.../101`), like a real camera
+- a ground-truth feed on the RTSP port + 1: what each camera is streaming right now (the playing part with its labelled vehicles, each vehicle's direction and plate, each ground-truth plate), for a detection program to compare with
 
 For ALPR testing, each video can carry a ground-truth list of the plates in it. The RTSP app logs the moment each plate is actually streamed and scores your ALPR results against that log (hit rate, misses, latency). Each camera shows live stats (frame rate, bitrate, viewers). The whole setup can be saved as a project and reopened.
 
@@ -55,6 +56,30 @@ Point your viewer at the URL in the log, for example `rtsp://127.0.0.1:8554/Stre
 Like a real camera, every camera also sends a smaller second stream: `Streaming/Channels/102` next to `.../101` (a path that does not end in 01 gets `_sub` added). Real ALPR setups often detect vehicles on the substream and read plates on the main stream. Both come from the same FFmpeg process, so they always show the same moment.
 
 The substream is set in **Settings > Defaults for videos > Substream**. It is on by default, 640 wide (the height keeps the main stream's shape; it is never larger than the main stream), at the main frame rate, with the encoder's default bitrate. Turn it off to send the main stream only. Changing these settings restarts every camera. A new camera's path is refused if it would land on another camera's substream, or the other way round.
+
+### Ground-truth feed (port + 1)
+
+While the server runs, the RTSP app also listens on the RTSP port + 1 (8555 next to 8554, on every network interface) and tells any program that connects what each camera is streaming, as it happens, so the program (for example Birel Plaka) can compare what it detects with what is really there:
+- **part**: the camera entered a playing part (played into it, or a seek, a loop or the next pass landed in it), with the vehicles labelled in it (time, direction, plate) or that it has none,
+- **vehicle**: a labelled vehicle's moment went out on the stream, with its direction (`coming` / `going`) and plate,
+- **plate**: a ground-truth plate went out on the stream (the same moment as the ground-truth log),
+- **camera**: a camera was added or removed.
+
+Labels and plates come from the scanner (they follow its changes at once). A moment counts when its frame goes into the encoder, as for the ground-truth log; moments in gaps or passed over by a seek are not sent.
+
+The protocol: plain TCP, UTF-8, one JSON object per line. On connecting, a program gets a `hello` with the cameras. It can send `camera <stream path>` (one line per camera it wants; for example `camera Streaming/Channels/101`) to get only those cameras' messages, or `all`; either way it then gets the part each camera is in now, and a program that sends nothing gets every camera after half a second. The app only sends; a program over 2000 lines behind is disconnected. For example:
+
+```
+{"type":"hello","protocol":1,"app":"Mock RTSP","utc":"2026-11-22T00:43:37.840Z","cameras":[{"camera":"Streaming/Channels/101","substream":"Streaming/Channels/102"}]}
+{"type":"part","utc":"2026-11-22T00:43:46.872Z","camera":"Streaming/Channels/101","video":"gate.mp4","videoTime":17,"part":2,"partStart":17,"partEnd":25.2,"labelled":true,"noVehicles":false,"vehicles":[{"time":20.1,"direction":"coming","plate":"38ADM643"},{"time":22,"direction":"coming","plate":"34BF644"}]}
+{"type":"vehicle","utc":"2026-11-22T00:43:49.757Z","camera":"Streaming/Channels/101","video":"gate.mp4","videoTime":20.1,"part":2,"direction":"coming","plate":"38ADM643"}
+{"type":"plate","utc":"2026-11-22T00:43:42.398Z","camera":"Streaming/Channels/101","video":"gate.mp4","videoTime":9,"plate":"38ADM643","region":{"x":0.4,"y":0.4,"width":0.2,"height":0.1}}
+{"type":"camera","utc":"...","camera":"Streaming/Channels/101","substream":"Streaming/Channels/102","state":"removed"}
+```
+
+- `utc`: when the frame went into the encoder (ISO 8601, UTC, milliseconds). `videoTime`: seconds in the video (for a part: where the stream entered it). `part`: the playing part's number in the video, `partStart`/`partEnd` its span. `labelled`: the part has vehicles or is checked as having none (`noVehicles`). `plate` is empty when the label has none; `region` (fractions of the picture) is null when the plate has none.
+- A program finds its camera's feed from the camera's RTSP URL: the same host, the port + 1, and the URL's path as the camera (`rtsp://host:8554/Streaming/Channels/101` → `host:8555`, `camera Streaming/Channels/101`).
+- Try it with `nc 127.0.0.1 8555` (or PuTTY in raw mode on Windows). If the port is taken, the server does not start and says so. Allow it in the Windows firewall for programs on other computers.
 
 ### Live stats
 
@@ -211,7 +236,7 @@ Errors are shown in a dialog and in the log. Unexpected errors (from both apps) 
 
 - Check the stream in VLC (Media > Open Network Stream) before testing your app.
 - The stream is always re-encoded, so any source FFmpeg can read works; there are no timestamp jumps at loop points or between playlist videos, because the encoder's clock never restarts.
-- RTP and RTCP ports are derived from the server port (+1000 and +1001), so the port range is 1025 to 64534.
+- RTP and RTCP ports are derived from the server port (+1000 and +1001), so the port range is 1025 to 64534. The ground-truth feed uses the server port + 1.
 
 ## For developers: how the code works
 
@@ -240,6 +265,7 @@ MainForm  (window, owns everything below; implements ICameraHost for the panels)
  │    ├─ MockCamera          decoder FFmpeg -> pump thread -> encoder FFmpeg -> MediaMTX
  │    └─ CameraPanel         the camera's controls and its Timeline (EditSkips off: show only)
  ├─ GroundTruthLog          ground-truth-YYYY-MM-DD.csv: one line per plate streamed (from MockCamera.PlateStreamed)
+ ├─ TruthFeed               TCP on the RTSP port + 1: parts, vehicles and plates as they are streamed (PartStreamed, VehicleStreamed, PlateStreamed)
  ├─ LiveStats               bitrates and viewers from MediaMtxServer.GetPathStatsAsync, polled every second
  ├─ OptionsStore            %APPDATA%\MockRtsp\options.json (defaults, server, remembered folders)
  └─ ProjectFile             *.mockrtsp-project: the whole setup
@@ -400,6 +426,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - `Load` validates and turns relative paths into full ones.
   - `Save` makes paths relative where possible, strips the remembered fields and writes atomically.
   - `Fingerprint` serializes the setup without position, current video or pause, so MainForm can tell whether there are unsaved changes.
+- **`TruthFeed.cs`**: the ground-truth feed (see Ground-truth feed). A `TcpListener` on all interfaces, started by `StartServerAsync` on the RTSP port + 1 before MediaMTX (a taken port stops the start with a message) and disposed by `StopServer`. `Part`, `Vehicle`, `Plate` and `CameraChanged` turn events into JSON lines (camelCase) for every client that wants that camera; the last part line of each camera is kept for clients that join or subscribe later. Each `Client` has a bounded queue (2000 lines; a slow client is dropped) written by its own task, and reads `camera <path>` / `all` lines; a silent client gets every camera's current part after 500 ms (`GreetAsync`). Thread-safe: the cameras call it on their pump threads.
 - **`MockCamera.cs`**: one camera; see the pipeline section above.
   - `PlaylistItem(File, Info)` record.
   - State: `Playlist`, `ItemIndex`, `Current`, `Position`, `Duration`, `IsPaused`, `Speed`, `Format`, `Options`, `IsOnline`, `Url`/`ViewerUrl`, and `LastFfmpegOutput` (the last 8 lines, for errors).
@@ -407,7 +434,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
   - Playlist and skips: `SetPlaylist` (keeps the playing video and its skips if it stays), `SetSkipRanges(file, ranges)` and `SkipRangesOf`.
   - Running: `ApplyOptions`, `Start`/`Stop`, `SimulateOutageAsync` (comes back at "now", moved on through the playlist), and `WaitUntilLiveAsync` (polls DESCRIBE).
   - Substream: `SubstreamPath`, `SubstreamUrl`, `SubstreamViewerUrl`, `SubstreamFormat`. `MeasuredFrameRate` is the frames actually sent per second.
-  - Ground truth: `SetPlates(file, plates)`; `PlateStreamed` (`PlateStreamedEventArgs(Utc, Video, Plate, Format)`) is raised on the pump thread after the plate's frame is written.
+  - Ground truth: `SetPlates(file, plates)`; `PlateStreamed` (`PlateStreamedEventArgs(Utc, Video, Plate, Format)`) is raised on the pump thread after the plate's frame is written. `SetVehicles(file, vehicles, emptyParts)`; `PartStreamed` (`PartStreamedEventArgs(Utc, Video, Part, At, Vehicles, MarkedEmpty)`) when the stream enters a playing part (a different part than the frame before, or the same one after a jump: seek, loop, next pass) and `VehicleStreamed` (`VehicleStreamedEventArgs(Utc, Video, Part, Vehicle)`) for a labelled vehicle's moment, both found by `CollectPlates` with the same rules as plates and raised in `RaisePlates` (part first) after the frame is written.
   - `PublisherExited` is raised on a background thread when FFmpeg dies by itself.
   - Internals: `Pump`; `ReadFrame` (moves to the next video at end of file, and skips a video that gives no frames); `Show` (skip check); `Resolve`; `MoveOnBy`; the `Decoder` class; `HighResolutionTimer`.
 - **`MainForm.cs` / `MainForm.Designer.cs`**: the window.
@@ -429,6 +456,7 @@ Every source file, what it is for and what it does. All code is in namespace `Mo
     - `EditVideoSettingsAsync(entry, video)`: one video's own settings; choosing the same as the defaults clears them.
     - `RestartAsync`/`ApplySettingsToCameraAsync` restart, wait for the stream to be live, and reopen VLC.
   - Playlists: `EditPlaylistAsync` opens the PlaylistDialog, opens and releases videos, and restarts only if the first video changes what is sent.
+  - Ground-truth feed: `_feed` (a TruthFeed, while the server runs); each camera's `PartStreamed`, `VehicleStreamed` and `PlateStreamed` go to it, and cameras added or removed are announced (`UpdateFeedCameras` keeps the list for "hello"). Videos' labels reach the cameras with `SetVehicles` wherever plates are set.
   - Ground truth: `OnPlateStreamed` writes each `PlateStreamed` to `_groundTruth` (a GroundTruthLog for the folder in the settings) and the log. `OnScoreClick` opens the ScoreDialog on today's (or the latest) log.
   - Live stats: `PollStats`/`PollStatsAsync` run from the timer about once a second; `StatsFor(entry)` serves the panels. `CheckStreamPath` and `NextStreamPath` keep substream paths free of clashes.
   - Projects: `CaptureProject`, `SaveProject(path or null = ask)`, `OpenProjectAsync` (stops the server, applies settings, port and folder, starts the server, `RestoreCamera` for each), `ConfirmDiscardChanges` (Yes/No/Cancel when the fingerprint differs), `OnShown` (reopens the last project), `UpdateTitle`.
@@ -543,7 +571,13 @@ Newest last. Commit hashes are on `main` (the history of the v2 and v3 branches 
 - `main` now holds everything: the work of `vehicle-labels`, and the whole history of the `v2` and `v3` branches merged in (with their files as they are on `main`: everything they had is here, rebuilt or replaced, as listed in the timeline above), so those branches can be deleted without losing anything.
 - Checked: the three projects compile against the .NET 8 Windows Forms reference assemblies (0 errors, 0 warnings); translation checks (English texts unchanged, Turkish texts, texts made earlier and saved reasons following a change, nested templates, back to English, saved directions staying English); the scanner under Mono WinForms with screenshots, switching to Turkish during a session and back. That run found a start-up crash in the translation code (fields set in the wrong order), fixed. Not yet run on Windows.
 
+**2026-11-22: ground-truth feed for detection programs**
+- While the server runs, the RTSP app listens on the RTSP port + 1 (8555) and sends, as each camera streams them, the playing part it entered with its labelled vehicles, each labelled vehicle (direction and plate) and each ground-truth plate, as JSON lines over TCP, so a program such as Birel Plaka can compare its detections with what is really there. Programs can ask for one camera (`camera <stream path>`). Birel Plaka itself is not changed.
+- Checked on Linux with MediaMTX 1.15.1 and a camera with gaps and labels: parts, vehicles and plates arrive at their moments (also after looping and after a seek into the middle of a part); a client asking for another camera gets only its hello; a client joining mid-part gets the current part once; a silent client gets every camera's after half a second; a taken port is refused with a message. Compiled against the .NET 8 Windows Forms reference assemblies (0 errors, 0 warnings). Not yet run on Windows.
+
 ## Where we left off
+
+- **Ground-truth feed**: nothing reads it yet. Birel Plaka could connect to its camera's host at the RTSP port + 1, ask for its camera, and compare each decided plate and direction with the `vehicle` messages around that time (and count the `part` vehicles it never reported). Check the Windows firewall prompt for port 8555.
 
 - **Language**: check the Turkish texts on Windows for width (longer words; the editor's rows wrap) and wording.
 

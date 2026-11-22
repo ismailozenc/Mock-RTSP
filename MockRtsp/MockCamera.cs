@@ -17,6 +17,17 @@ public sealed record PlaylistItem(string File, VideoInfo Info)
 /// </summary>
 public sealed record PlateStreamedEventArgs(DateTime Utc, PlaylistItem Video, PlateMark Plate, VideoFormat Format);
 
+/// <summary>A labelled vehicle's moment went out on the stream (its frame was just written to the encoder).</summary>
+public sealed record VehicleStreamedEventArgs(DateTime Utc, PlaylistItem Video, PlayingPart Part, VehicleMark Vehicle);
+
+/// <summary>
+/// The stream entered a playing part (a new pass: played into it, or a jump, a seek or a loop landed
+/// in it), with the vehicles labelled in it. <paramref name="At"/> is where in the video the stream
+/// entered it (the start, unless a seek landed in the middle).
+/// </summary>
+public sealed record PartStreamedEventArgs(DateTime Utc, PlaylistItem Video, PlayingPart Part, double At,
+    IReadOnlyList<VehicleMark> Vehicles, bool MarkedEmpty);
+
 /// <summary>
 /// A mock camera that plays a playlist of video files into MediaMTX like a live camera, with
 /// pause, seek, speed and skip ranges per video.
@@ -56,6 +67,8 @@ public sealed class MockCamera : IDisposable
 
     // Pump thread only: plates reached by the frame being sent, raised once it is written.
     private readonly List<(PlaylistItem Video, PlateMark Plate)> _plateHits = new();
+    private readonly List<VehicleStreamedEventArgs> _vehicleHits = new();   // Utc filled in when raised
+    private PartStreamedEventArgs? _partHit;
     private Target? _lastShown;                     // the frame shown before, to find plates passed since
     private double _measuredFps;                    // frames actually written per second, over the last second
 
@@ -78,6 +91,8 @@ public sealed class MockCamera : IDisposable
         public PlaylistItem Item { get; }
         public IReadOnlyList<SkipRange> Skips { get; set; }
         public IReadOnlyList<PlateMark> Plates { get; set; } = Array.Empty<PlateMark>();
+        public IReadOnlyList<VehicleMark> Vehicles { get; set; } = Array.Empty<VehicleMark>();
+        public IReadOnlyList<double> EmptyParts { get; set; } = Array.Empty<double>();
         public double Duration => Item.Info.DurationSeconds;
     }
 
@@ -94,6 +109,18 @@ public sealed class MockCamera : IDisposable
     /// a seek. Raised on the camera's own thread, so keep handlers short.
     /// </summary>
     public event EventHandler<PlateStreamedEventArgs>? PlateStreamed;
+
+    /// <summary>
+    /// Raised when a labelled vehicle goes out on the stream: the frame at its time has just been
+    /// written to the encoder. Same rules and thread as <see cref="PlateStreamed"/>.
+    /// </summary>
+    public event EventHandler<VehicleStreamedEventArgs>? VehicleStreamed;
+
+    /// <summary>
+    /// Raised when the stream enters a playing part (before that frame's vehicles and plates), with
+    /// the vehicles labelled in it. Raised on the camera's own thread, so keep handlers short.
+    /// </summary>
+    public event EventHandler<PartStreamedEventArgs>? PartStreamed;
 
     /// <param name="path">Stream path, e.g. "Streaming/Channels/101" to match Hikvision URLs.</param>
     /// <param name="playlist">The videos to play, in order. At least one.</param>
@@ -335,6 +362,19 @@ public sealed class MockCamera : IDisposable
         }
     }
 
+    /// <summary>Sets the vehicle labels of a video (and its parts checked as having none), for every place it has in the playlist.</summary>
+    public void SetVehicles(string file, IReadOnlyList<VehicleMark> vehicles, IReadOnlyList<double> emptyParts)
+    {
+        lock (_control)
+        {
+            foreach (var entry in _playlist.Where(e => SameFile(e.Item.File, file)))
+            {
+                entry.Vehicles = VehicleLabels.Normalize(vehicles ?? Array.Empty<VehicleMark>(), entry.Duration);
+                entry.EmptyParts = VehicleLabels.NormalizeEmpty(emptyParts ?? Array.Empty<double>(), entry.Duration);
+            }
+        }
+    }
+
     /// <summary>The skip ranges in use for a video of the playlist.</summary>
     public IReadOnlyList<SkipRange> SkipRangesOf(string file)
     {
@@ -362,7 +402,12 @@ public sealed class MockCamera : IDisposable
                 .Select(i =>
                 {
                     var before = old.FirstOrDefault(e => SameFile(e.Item.File, i.File));
-                    return new Entry(i, before?.Skips ?? Array.Empty<SkipRange>()) { Plates = before?.Plates ?? Array.Empty<PlateMark>() };
+                    return new Entry(i, before?.Skips ?? Array.Empty<SkipRange>())
+                    {
+                        Plates = before?.Plates ?? Array.Empty<PlateMark>(),
+                        Vehicles = before?.Vehicles ?? Array.Empty<VehicleMark>(),
+                        EmptyParts = before?.EmptyParts ?? Array.Empty<double>()
+                    };
                 })
                 .ToList();
 
@@ -703,6 +748,8 @@ public sealed class MockCamera : IDisposable
             }
 
             _plateHits.Clear();
+            _vehicleHits.Clear();
+            _partHit = null;
             var rateClock = Stopwatch.StartNew();
             int rateFrames = 0;
 
@@ -769,7 +816,7 @@ public sealed class MockCamera : IDisposable
                 output.Write(frame, 0, frame.Length);
                 sent++;
 
-                if (_plateHits.Count > 0)
+                if (_partHit is not null || _vehicleHits.Count > 0 || _plateHits.Count > 0)
                     RaisePlates(format);
 
                 rateFrames++;
@@ -809,10 +856,38 @@ public sealed class MockCamera : IDisposable
         }
     }
 
-    /// <summary>Tells listeners about plates whose frame was just written. Pump thread.</summary>
+    /// <summary>Tells listeners about the part entered, and the vehicles and plates whose frame was just written. Pump thread.</summary>
     private void RaisePlates(VideoFormat format)
     {
         var now = DateTime.UtcNow;
+        if (_partHit is { } part)
+        {
+            try
+            {
+                PartStreamed?.Invoke(this, part with { Utc = now });
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, $"Camera {_path} part listener");
+            }
+
+            _partHit = null;
+        }
+
+        foreach (var vehicle in _vehicleHits)
+        {
+            try
+            {
+                VehicleStreamed?.Invoke(this, vehicle with { Utc = now });
+            }
+            catch (Exception ex)
+            {
+                ErrorReporter.Report(ex, $"Camera {_path} vehicle listener");
+            }
+        }
+
+        _vehicleHits.Clear();
+
         foreach (var (video, plate) in _plateHits)
         {
             try
@@ -967,21 +1042,41 @@ public sealed class MockCamera : IDisposable
     }
 
     /// <summary>
-    /// Notes the plates this frame reaches: those after the frame shown before (when playing on
-    /// from it) up to this one. After a jump, only a plate on this very frame counts. Caller holds _control.
+    /// Notes the plates and labelled vehicles this frame reaches: those after the frame shown before
+    /// (when playing on from it) up to this one. After a jump, only those on this very frame count.
+    /// Also notes entering a playing part: a different part than the frame before, or the same one
+    /// again after a jump (a seek, a loop, the next pass). Caller holds _control.
     /// </summary>
     private void CollectPlates(Target at, VideoFormat format)
     {
         var entry = _playlist[at.Item];
-        double from = _lastShown is { } last && last.Item == at.Item && at.Seconds >= last.Seconds && at.Seconds - last.Seconds < 2
-            ? last.Seconds
-            : at.Seconds - 1.0 / format.FrameRate;
+        bool playingOn = _lastShown is { } last && last.Item == at.Item && at.Seconds >= last.Seconds && at.Seconds - last.Seconds < 2;
+        double from = playingOn ? _lastShown!.Value.Seconds : at.Seconds - 1.0 / format.FrameRate;
+        var previous = _lastShown;
         _lastShown = at;
 
         foreach (var plate in entry.Plates)
         {
             if (plate.Time > from && plate.Time <= at.Seconds)
                 _plateHits.Add((entry.Item, plate));
+        }
+
+        var parts = VehicleLabels.PlayingParts(entry.Skips, entry.Duration);
+        var part = parts.FirstOrDefault(p => p.Contains(at.Seconds, entry.Duration));
+        if (part is null)
+            return;
+
+        bool samePart = playingOn && previous is { } before && part.Contains(before.Seconds, entry.Duration);
+        if (!samePart)
+        {
+            var group = VehicleLabels.Group(new[] { part }, entry.Vehicles, entry.EmptyParts, entry.Duration).Single();
+            _partHit = new PartStreamedEventArgs(default, entry.Item, part, Math.Round(at.Seconds, 3), group.Vehicles, group.MarkedEmpty);
+        }
+
+        foreach (var vehicle in entry.Vehicles)
+        {
+            if (vehicle.Time > from && vehicle.Time <= at.Seconds && part.Contains(vehicle.Time, entry.Duration))
+                _vehicleHits.Add(new VehicleStreamedEventArgs(default, entry.Item, part, vehicle));
         }
     }
 
